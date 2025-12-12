@@ -4,7 +4,8 @@ const staffSchema = new mongoose.Schema({
   staffId: {
     type: String,
     required: true,
-    unique: true
+    unique: true,
+    index: true
   },
   name: {
     type: String,
@@ -49,7 +50,6 @@ const staffSchema = new mongoose.Schema({
   timestamps: true
 });
 
-staffSchema.index({ staffId: 1 });
 staffSchema.index({ availability: 1 });
 
 module.exports = mongoose.model('Staff', staffSchema);

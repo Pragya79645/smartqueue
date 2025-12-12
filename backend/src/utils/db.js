@@ -5,10 +5,7 @@ const connectDB = async () => {
   try {
     const mongoURI = process.env.MONGO_URI || 'mongodb://localhost:27017/queue-balancer';
     
-    await mongoose.connect(mongoURI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    });
+    await mongoose.connect(mongoURI);
     
     logger.info('MongoDB connected successfully');
     console.log('✅ MongoDB connected');
