@@ -18,17 +18,18 @@ exports.getOptimizedAllocation = async (data) => {
       throw new Error('Queue data and staff data are required');
     }
 
+    // Transform data to Flask API format
+    const flaskPayload = transformToFlaskFormat(queueData, staffData, constraints);
+
     // Call Python AI service
-    const response = await axios.post(`${PYTHON_API_URL}/optimize`, {
-      queues: queueData,
-      staff: staffData,
-      constraints: constraints || {}
-    }, {
+    const response = await axios.post(`${PYTHON_API_URL}/optimize`, flaskPayload, {
       timeout: 10000 // 10 seconds
     });
 
     logger.info('Optimization completed successfully');
-    return response.data;
+    
+    // Transform Flask response back to backend format
+    return transformFlaskResponse(response.data);
 
   } catch (error) {
     if (error.code === 'ECONNREFUSED') {
@@ -41,6 +42,153 @@ exports.getOptimizedAllocation = async (data) => {
     throw error;
   }
 };
+
+/**
+ * Transform backend data format to Flask API expected format
+ */
+function transformToFlaskFormat(queueData, staffData, constraints = {}) {
+  // Build current queue load by counter type
+  const current_queue_load = {};
+  const predicted_queue_load = {};
+  const counters = [];
+
+  queueData.forEach((queue, index) => {
+    // Map counter type from skills or use generic naming
+    const counterType = mapCounterType(queue.counterId);
+    
+    current_queue_load[counterType] = queue.queueSize || 0;
+    predicted_queue_load[counterType] = queue.predictedSize || queue.queueSize || 0;
+    
+    counters.push({
+      id: index + 1,
+      counter_type: counterType,
+      max_capacity: constraints.maxCapacityPerCounter || 2,
+      priority: queue.status === 'critical' ? 1 : 2
+    });
+  });
+
+  // Transform staff data
+  const staff = staffData.map((s, index) => {
+    // Calculate available time slots (8 hour shift = 8 slots)
+    const available_slots = calculateAvailableSlots(s.shiftStart, s.shiftEnd);
+    
+    // Map skill level based on performance score
+    const skill_level = s.performanceScore >= 90 ? 'advanced' : 
+                        s.performanceScore >= 70 ? 'intermediate' : 'basic';
+    
+    // Calculate hourly rate based on skill level and performance
+    const hourly_rate = calculateHourlyRate(skill_level, s.performanceScore);
+
+    return {
+      id: index + 1,
+      name: s.name,
+      skill_level: skill_level,
+      skills: s.skills || ['general'],
+      available_slots: available_slots,
+      max_hours: available_slots.length,
+      hourly_rate: hourly_rate
+    };
+  });
+
+  // Generate time slots (8 hours = 8 slots)
+  const time_slots = Array.from({ length: 8 }, (_, i) => i);
+
+  return {
+    current_queue_load,
+    predicted_queue_load,
+    staff,
+    counters,
+    time_slots,
+    budget: constraints.budget || 5000.0
+  };
+}
+
+/**
+ * Map counter ID to counter type
+ */
+function mapCounterType(counterId) {
+  const typeMap = {
+    1: 'general',
+    2: 'loan',
+    3: 'account',
+    4: 'cashier',
+    5: 'inquiry',
+    6: 'premium'
+  };
+  return typeMap[counterId] || `counter_${counterId}`;
+}
+
+/**
+ * Calculate available time slots based on shift times
+ */
+function calculateAvailableSlots(shiftStart, shiftEnd) {
+  // Default: 9 AM to 5 PM (8 hours)
+  const start = shiftStart ? parseInt(shiftStart.split(':')[0]) : 9;
+  const end = shiftEnd ? parseInt(shiftEnd.split(':')[0]) : 17;
+  const hours = end - start;
+  
+  // Return array of slot indices [0, 1, 2, ..., hours-1]
+  return Array.from({ length: hours }, (_, i) => i);
+}
+
+/**
+ * Calculate hourly rate based on skill level and performance
+ */
+function calculateHourlyRate(skill_level, performanceScore) {
+  const baseRates = {
+    basic: 15.0,
+    intermediate: 20.0,
+    advanced: 25.0
+  };
+  
+  const baseRate = baseRates[skill_level] || 15.0;
+  // Add bonus based on performance (up to 20% more)
+  const performanceBonus = (performanceScore / 100) * (baseRate * 0.2);
+  
+  return parseFloat((baseRate + performanceBonus).toFixed(2));
+}
+
+/**
+ * Transform Flask response to backend format
+ */
+function transformFlaskResponse(flaskResponse) {
+  // If infeasible or no staff recommended
+  if (flaskResponse.status === 'infeasible' || !flaskResponse.recommended_staff) {
+    return {
+      success: false,
+      allocations: [],
+      totalScore: 0,
+      status: flaskResponse.status || 'infeasible',
+      message: 'No feasible allocation found',
+      predictedQueue: flaskResponse.predicted_queue || 0,
+      totalCost: flaskResponse.total_cost || 0,
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  // Transform recommended_staff to backend allocations format
+  const allocations = flaskResponse.recommended_staff.map(rec => ({
+    staffId: rec.staff_id,
+    staffName: rec.staff_name,
+    counterId: rec.counter,
+    counterType: rec.counter_type,
+    startTime: rec.start_time,
+    endTime: rec.end_time,
+    priority: 1,
+    reason: `Optimized allocation for ${rec.counter_type}`
+  }));
+
+  return {
+    success: true,
+    allocations,
+    totalScore: allocations.length * 100,
+    totalCost: flaskResponse.total_cost || 0,
+    predictedQueue: flaskResponse.predicted_queue || 0,
+    status: flaskResponse.status || 'optimal',
+    algorithm: 'or-tools-optimization',
+    timestamp: new Date().toISOString()
+  };
+}
 
 /**
  * Mock optimization for development/testing when Python service is unavailable
