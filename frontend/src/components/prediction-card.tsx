@@ -48,7 +48,7 @@ export function PredictionCard({
                 </div>
 
                 <div className="flex gap-2 p-3 bg-muted/50 rounded-lg border border-border/50">
-                    <AlertTriangle className="h-4 w-4 text-primary mt-0.5 flex-shrink-0" />
+                    <AlertTriangle className="h-4 w-4 text-primary mt-0.5 shrink-0" />
                     <p className="text-sm text-muted-foreground">{recommendation}</p>
                 </div>
             </CardContent>

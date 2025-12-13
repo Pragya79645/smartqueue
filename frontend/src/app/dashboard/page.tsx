@@ -4,20 +4,23 @@ import { useEffect, useState } from "react"
 import { CounterCard } from "@/components/counter-card"
 import { QueueGraph } from "@/components/queue-graph"
 import { PredictionCard } from "@/components/prediction-card"
+import { OptimizationCard } from "@/components/optimization-card"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Activity, AlertTriangle, BarChart3, Settings, Users, Bell } from "lucide-react"
 import Link from "next/link"
 import { getCurrentQueue, getQueuePrediction } from "@/api/queueApi"
-import { getOptimizedAllocation } from "@/api/allocationApi"
+import { getOptimizedAllocation, applyAllocation } from "@/api/allocationApi"
 
 export default function DashboardPage() {
   const [queueData, setQueueData] = useState<any[]>([])
   const [prediction, setPrediction] = useState<any>(null)
   const [optimization, setOptimization] = useState<any>(null)
   const [loading, setLoading] = useState(true)
+  const [optimizationLoading, setOptimizationLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [successMessage, setSuccessMessage] = useState<string | null>(null)
 
   // Fetch live queue data
   useEffect(() => {
@@ -57,6 +60,45 @@ export default function DashboardPage() {
       fetchPredictions()
       const interval = setInterval(fetchPredictions, 30000) // Refresh every 30 seconds
       return () => clearInterval(interval)
+    }
+  }, [queueData])
+
+  // Fetch optimization recommendation
+  const fetchOptimization = async () => {
+    setOptimizationLoading(true)
+    try {
+      const response = await getOptimizedAllocation()
+      if (response.success) {
+        setOptimization(response.allocation)
+      }
+    } catch (err: any) {
+      console.error("Error fetching optimization:", err)
+      setError("Failed to generate optimization recommendation")
+    } finally {
+      setOptimizationLoading(false)
+    }
+  }
+
+  // Apply allocation
+  const handleApplyAllocation = async (allocationId: string) => {
+    try {
+      const response = await applyAllocation(allocationId)
+      if (response.success) {
+        setSuccessMessage("Allocation applied successfully! Staff have been notified via WhatsApp.")
+        setOptimization({ ...optimization, status: 'applied' })
+        // Clear success message after 5 seconds
+        setTimeout(() => setSuccessMessage(null), 5000)
+      }
+    } catch (err: any) {
+      console.error("Error applying allocation:", err)
+      setError("Failed to apply allocation")
+    }
+  }
+
+  // Load initial optimization on mount
+  useEffect(() => {
+    if (queueData.length > 0 && !optimization) {
+      fetchOptimization()
     }
   }, [queueData])
 
@@ -149,7 +191,17 @@ export default function DashboardPage() {
       </header>
 
       <main className="container mx-auto px-6 py-8">
-        {/* Alert Banner */}
+        {/* Alert Banners */}
+        {successMessage && (
+          <Alert className="mb-6 border-success/50 bg-success/5">
+            <AlertTriangle className="h-4 w-4 text-success" />
+            <AlertTitle className="text-success">Success</AlertTitle>
+            <AlertDescription className="text-success/80">
+              {successMessage}
+            </AlertDescription>
+          </Alert>
+        )}
+
         {criticalCounters > 0 && (
           <Alert className="mb-6 border-warning/50 bg-warning/5">
             <AlertTriangle className="h-4 w-4 text-warning" />
@@ -208,6 +260,16 @@ export default function DashboardPage() {
           </div>
         )}
 
+        {/* Optimization Card */}
+        <div className="mb-8">
+          <OptimizationCard
+            allocation={optimization}
+            loading={optimizationLoading}
+            onApply={handleApplyAllocation}
+            onRefresh={fetchOptimization}
+          />
+        </div>
+
         {/* Counter Cards Grid */}
         <div className="mb-8">
           <h2 className="text-2xl font-bold text-foreground mb-4">Live Counter Status</h2>
@@ -223,6 +285,8 @@ export default function DashboardPage() {
                   title={`Counter ${counter.counterId}`}
                   value={counter.queueSize?.toString() || "0"}
                   status={counter.status || "normal"}
+                  waitTime={counter.averageWaitTime}
+                  details={`Last updated: ${new Date(counter.timestamp).toLocaleTimeString()}`}
                 />
               ))}
             </div>
@@ -235,3 +299,4 @@ export default function DashboardPage() {
     </div>
   )
 }
+

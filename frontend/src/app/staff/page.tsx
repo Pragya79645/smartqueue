@@ -1,12 +1,54 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import { StaffTable } from "@/components/staff-table"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Activity, BarChart3, Settings, Users, Bell, Download, Upload } from "lucide-react"
 import Link from "next/link"
+import { getStaffList, getAvailableStaffCount } from "@/api/staffApi"
 
 export default function StaffPage() {
+  const [staffData, setStaffData] = useState<any[]>([])
+  const [stats, setStats] = useState({ total: 0, available: 0, onBreak: 0, busy: 0 })
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [staffResponse, availableResponse] = await Promise.all([
+          getStaffList(),
+          getAvailableStaffCount()
+        ])
+        
+        if (staffResponse.success) {
+          const staff = staffResponse.staff || []
+          setStaffData(staff)
+          
+          // Calculate stats
+          const available = staff.filter((s: any) => s.isAvailable).length
+          const busy = staff.filter((s: any) => s.currentCounter).length
+          const onBreak = staff.length - available - busy
+          
+          setStats({
+            total: staff.length,
+            available,
+            onBreak: Math.max(0, onBreak),
+            busy
+          })
+        }
+      } catch (err: any) {
+        console.error("Error fetching staff data:", err)
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchData()
+    const interval = setInterval(fetchData, 10000) // Refresh every 10 seconds
+    return () => clearInterval(interval)
+  }, [])
+
   const handleEdit = (staff: any) => {
     console.log("Edit staff:", staff)
     // TODO: Open edit modal/form
@@ -88,7 +130,7 @@ export default function StaffPage() {
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
             <div className="p-4 bg-card border border-border/50 rounded-lg">
               <p className="text-sm text-muted-foreground mb-2">Total Staff</p>
-              <p className="text-3xl font-bold text-card-foreground">24</p>
+              <p className="text-3xl font-bold text-card-foreground">{loading ? "..." : stats.total}</p>
             </div>
             <div className="p-4 bg-card border border-border/50 rounded-lg">
               <div className="flex items-center justify-between mb-2">
@@ -97,20 +139,26 @@ export default function StaffPage() {
                   Active
                 </Badge>
               </div>
-              <p className="text-3xl font-bold text-success">18</p>
+              <p className="text-3xl font-bold text-success">{loading ? "..." : stats.available}</p>
             </div>
             <div className="p-4 bg-card border border-border/50 rounded-lg">
               <p className="text-sm text-muted-foreground mb-2">On Break</p>
-              <p className="text-3xl font-bold text-warning">4</p>
+              <p className="text-3xl font-bold text-warning">{loading ? "..." : stats.onBreak}</p>
             </div>
             <div className="p-4 bg-card border border-border/50 rounded-lg">
               <p className="text-sm text-muted-foreground mb-2">Busy</p>
-              <p className="text-3xl font-bold text-chart-1">2</p>
+              <p className="text-3xl font-bold text-chart-1">{loading ? "..." : stats.busy}</p>
             </div>
           </div>
         </div>
 
-        <StaffTable onEdit={handleEdit} onDelete={handleDelete} onAdd={handleAdd} />
+        <StaffTable 
+          staffData={staffData}
+          loading={loading}
+          onEdit={handleEdit} 
+          onDelete={handleDelete} 
+          onAdd={handleAdd} 
+        />
       </main>
     </div>
   )

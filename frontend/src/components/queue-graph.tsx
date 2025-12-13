@@ -7,7 +7,7 @@ export function QueueGraph() {
                 <CardTitle>Queue Overview</CardTitle>
             </CardHeader>
             <CardContent className="pl-2">
-                <div className="h-[200px] flex items-center justify-center text-muted-foreground">
+                <div className="h-50 flex items-center justify-center text-muted-foreground">
                     Graph Placeholder
                 </div>
             </CardContent>
