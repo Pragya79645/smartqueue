@@ -1,4 +1,5 @@
 const QueueRecord = require('../models/QueueRecord');
+const predictionService = require('../services/predictionService');
 const logger = require('../utils/logger');
 
 // GET /queue/live - Get current live queue data
@@ -223,6 +224,57 @@ exports.cleanOldData = async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to clean old data'
+    });
+  }
+};
+
+// GET /queue/predict - Get queue predictions
+exports.getPredictions = async (req, res) => {
+  try {
+    const { counterId, minutesAhead = 15 } = req.query;
+
+    // Get historical data for prediction
+    let query = {};
+    if (counterId) {
+      query.counterId = parseInt(counterId);
+    }
+
+    const historicalData = await QueueRecord.find(query)
+      .sort({ timestamp: -1 })
+      .limit(60);
+
+    if (historicalData.length < 10) {
+      return res.status(400).json({
+        success: false,
+        error: 'Insufficient historical data for prediction (need at least 10 records)'
+      });
+    }
+
+    // Reverse to chronological order
+    historicalData.reverse();
+
+    // Get predictions from AI service
+    const prediction = await predictionService.predictQueueLoad(
+      historicalData,
+      parseInt(minutesAhead)
+    );
+
+    // Detect rush trend
+    const rushTrend = predictionService.detectRushTrend(historicalData.slice(-10));
+
+    res.json({
+      success: true,
+      prediction: prediction,
+      rushTrend: rushTrend,
+      historicalDataPoints: historicalData.length,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    logger.error('Error getting predictions:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get predictions'
     });
   }
 };

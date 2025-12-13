@@ -2,6 +2,7 @@ const Allocation = require('../models/Allocation');
 const QueueRecord = require('../models/QueueRecord');
 const Staff = require('../models/Staff');
 const optimizeService = require('../services/optimizeService');
+const whatsappService = require('../services/whatsappService');
 const logger = require('../utils/logger');
 
 // POST /allocate/now - Get optimized allocation recommendation
@@ -141,6 +142,8 @@ exports.applyAllocation = async (req, res) => {
 
     // Apply each allocation
     const results = [];
+    const notifications = [];
+    
     for (const alloc of allocation.allocations) {
       const staff = await Staff.findOneAndUpdate(
         { staffId: alloc.staffId },
@@ -157,6 +160,31 @@ exports.applyAllocation = async (req, res) => {
           counterId: alloc.counterId,
           success: true
         });
+
+        // Send WhatsApp notification if phone number available
+        if (staff.phone) {
+          try {
+            const message = `Hi ${staff.name}! You've been assigned to Counter ${alloc.counterId}. Please proceed there immediately. Priority: ${alloc.priority || 'Normal'}. Reason: ${alloc.reason || 'Optimized allocation'}`;
+            
+            const result = await whatsappService.sendMessage(staff.phone, message);
+            
+            notifications.push({
+              staffId: alloc.staffId,
+              phone: staff.phone,
+              sent: result.success
+            });
+            
+            logger.info(`WhatsApp notification sent to ${staff.name}`);
+          } catch (error) {
+            logger.error(`Failed to send WhatsApp to ${staff.name}:`, error);
+            notifications.push({
+              staffId: alloc.staffId,
+              phone: staff.phone,
+              sent: false,
+              error: error.message
+            });
+          }
+        }
       } else {
         results.push({
           staffId: alloc.staffId,
@@ -178,6 +206,8 @@ exports.applyAllocation = async (req, res) => {
       success: true,
       data: allocation,
       results,
+      notifications,
+      notificationsSent: notifications.filter(n => n.sent).length,
       message: 'Allocation applied successfully'
     });
 

@@ -1,15 +1,35 @@
 import numpy as np
 import joblib
+import os
 from tensorflow.keras.models import load_model
 
 # ==========================================
 #   LOAD MODEL + SCALER
 # ==========================================
-MODEL_PATH = "models/lstm_model.h5"
-SCALER_PATH = "models/scaler.pkl"
+# Get absolute paths relative to this file
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODEL_PATH = os.path.join(BASE_DIR, "models", "lstm_model.h5")
+SCALER_PATH = os.path.join(BASE_DIR, "models", "scaler.pkl")
 
-model = load_model(MODEL_PATH)
+model = load_model(MODEL_PATH, compile=False)
+model.compile(optimizer="adam", loss="mse")
 scaler = joblib.load(SCALER_PATH)
+
+# ==========================================
+#   NOTE ON PREDICTION CONFIDENCE
+# ==========================================
+# LSTM models do NOT natively provide probability-based confidence scores.
+# 
+# The confidence values used in this system are derived from the rolling 
+# error/variance of the input data, NOT from the LSTM model itself.
+# 
+# This is a standard heuristic in time-series forecasting:
+# - High data variance → Lower confidence (unstable patterns)
+# - Low data variance → Higher confidence (stable patterns)
+# 
+# This approach provides a practical indicator of prediction reliability
+# when probabilistic outputs are not available from the model.
+# ==========================================
 
 
 # ==========================================
@@ -39,8 +59,11 @@ def predict_next_queue_length(last_60_values):
 
     # Inverse-scale to original queue_length
     predicted_value = scaler.inverse_transform(predicted_scaled)
+    
+    # Enforce non-negative queue length
+    pred_actual = max(0, float(predicted_value[0][0]))
 
-    return float(predicted_value[0][0])
+    return pred_actual
 
 
 # ==========================================
@@ -82,7 +105,10 @@ def predict_future_queue_length(last_60_values, minutes_ahead=15):
         
         # Inverse-scale
         predicted_value = scaler.inverse_transform(predicted_scaled)
-        predictions.append(float(predicted_value[0][0]))
+        
+        # Enforce non-negative queue length
+        pred_actual = max(0, float(predicted_value[0][0]))
+        predictions.append(pred_actual)
         
         # Update sequence: remove oldest, add newest prediction
         current_sequence = np.vstack([current_sequence[1:], predicted_value])

@@ -17,6 +17,9 @@ router.get('/history', queueController.getQueueHistory);
 // GET /queue/stats - Get queue statistics
 router.get('/stats', queueController.getQueueStats);
 
+// GET /queue/predict - Get queue predictions
+router.get('/predict', queueController.getPredictions);
+
 // DELETE /queue/history - Clean old data
 router.delete('/history', queueController.cleanOldData);
 
