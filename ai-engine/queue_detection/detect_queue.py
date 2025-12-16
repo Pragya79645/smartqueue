@@ -95,14 +95,9 @@ class QueueDetector:
             True if loaded successfully
         """
         try:
-            model_full_path = Path(__file__).parent / self.model_path
-            
-            if not model_full_path.exists():
-                logger.warning(f"Model not found at {model_full_path}, using YOLOv8n")
-                self.model = YOLO('yolov8n.pt')  # Download pretrained model
-            else:
-                logger.info(f"Loading model from {model_full_path}")
-                self.model = YOLO(str(model_full_path))
+            # Use standard YOLOv8n model which will auto-download if needed
+            logger.info("Loading YOLOv8n model...")
+            self.model = YOLO('yolov8n.pt')
             
             # Test model
             logger.info("Model loaded successfully")
