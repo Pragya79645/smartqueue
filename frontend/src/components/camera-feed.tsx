@@ -4,25 +4,61 @@ import { useEffect, useRef, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Camera, AlertTriangle, Video, Loader2 } from "lucide-react"
+import { Camera, AlertTriangle, Video, Loader2, Upload } from "lucide-react"
 import { processVideoFrame, FrameDetectionResponse } from "@/api/aiApi"
 
 export function CameraFeed() {
     const [isLive, setIsLive] = useState(false)
     const [isProcessing, setIsProcessing] = useState(false)
     const [isStarting, setIsStarting] = useState(false)
+    const [sourceType, setSourceType] = useState<"camera" | "upload">("camera")
+    const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([])
+    const [selectedDeviceId, setSelectedDeviceId] = useState<string>("default")
+    const [uploadedVideoName, setUploadedVideoName] = useState<string>("")
     const videoRef = useRef<HTMLVideoElement>(null)
     const canvasRef = useRef<HTMLCanvasElement>(null)
+    const uploadInputRef = useRef<HTMLInputElement>(null)
+    const uploadedVideoUrlRef = useRef<string | null>(null)
     const streamRef = useRef<MediaStream | null>(null)
     const processingIntervalRef = useRef<NodeJS.Timeout | null>(null)
     const [detectionData, setDetectionData] = useState<FrameDetectionResponse | null>(null)
     const [error, setError] = useState<string | null>(null)
 
+    const stopCurrentStream = () => {
+        if (streamRef.current) {
+            streamRef.current.getTracks().forEach(track => track.stop())
+            streamRef.current = null
+        }
+    }
+
+    const loadVideoDevices = async () => {
+        try {
+            const devices = await navigator.mediaDevices.enumerateDevices()
+            const cameras = devices.filter(device => device.kind === "videoinput")
+            setVideoDevices(cameras)
+            if (cameras.length > 0 && !cameras.some(device => device.deviceId === selectedDeviceId)) {
+                setSelectedDeviceId(cameras[0].deviceId)
+            }
+        } catch (err) {
+            console.error("Failed to enumerate video devices:", err)
+        }
+    }
+
     useEffect(() => {
+        if (typeof navigator !== "undefined" && navigator.mediaDevices?.enumerateDevices) {
+            void loadVideoDevices()
+            navigator.mediaDevices.addEventListener("devicechange", loadVideoDevices)
+        }
+
         return () => {
             stopProcessing()
-            if (streamRef.current) {
-                streamRef.current.getTracks().forEach(track => track.stop())
+            stopCurrentStream()
+            if (uploadedVideoUrlRef.current) {
+                URL.revokeObjectURL(uploadedVideoUrlRef.current)
+                uploadedVideoUrlRef.current = null
+            }
+            if (typeof navigator !== "undefined" && navigator.mediaDevices?.removeEventListener) {
+                navigator.mediaDevices.removeEventListener("devicechange", loadVideoDevices)
             }
         }
     }, [])
@@ -30,13 +66,26 @@ export function CameraFeed() {
     const startWebcam = async () => {
         setIsStarting(true)
         setError(null)
+        setSourceType("camera")
         try {
+            stopCurrentStream()
+            if (uploadedVideoUrlRef.current) {
+                URL.revokeObjectURL(uploadedVideoUrlRef.current)
+                uploadedVideoUrlRef.current = null
+            }
+            setUploadedVideoName("")
+            if (videoRef.current) {
+                videoRef.current.src = ""
+                videoRef.current.srcObject = null
+            }
             const stream = await navigator.mediaDevices.getUserMedia({
                 video: {
+                    ...(selectedDeviceId !== "default" ? { deviceId: { exact: selectedDeviceId } } : {}),
                     width: { ideal: 1280 },
                     height: { ideal: 720 }
                 }
             })
+            await loadVideoDevices()
             if (videoRef.current) {
                 videoRef.current.srcObject = stream
                 streamRef.current = stream
@@ -66,6 +115,47 @@ export function CameraFeed() {
         }
     }
 
+    const handleUploadVideo = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0]
+        if (!file) return
+
+        if (file.type !== "video/mp4") {
+            setError("Please upload an MP4 video file.")
+            event.target.value = ""
+            return
+        }
+
+        setError(null)
+        setSourceType("upload")
+        stopCurrentStream()
+
+        if (uploadedVideoUrlRef.current) {
+            URL.revokeObjectURL(uploadedVideoUrlRef.current)
+            uploadedVideoUrlRef.current = null
+        }
+
+        const objectUrl = URL.createObjectURL(file)
+        uploadedVideoUrlRef.current = objectUrl
+        setUploadedVideoName(file.name)
+
+        if (videoRef.current) {
+            videoRef.current.srcObject = null
+            videoRef.current.src = objectUrl
+            videoRef.current.currentTime = 0
+            videoRef.current.onloadedmetadata = () => {
+                setIsLive(true)
+                startFrameProcessing()
+            }
+            try {
+                await videoRef.current.play()
+            } catch {
+                // Browser may block autoplay depending on policy; user can press play controls.
+            }
+        }
+
+        event.target.value = ""
+    }
+
     const captureFrame = (): string | null => {
         if (!videoRef.current || !canvasRef.current) return null
         const video = videoRef.current
@@ -85,7 +175,7 @@ export function CameraFeed() {
             const frameData = captureFrame()
             if (!frameData) return
             try {
-                const result = await processVideoFrame(frameData, 'webcam')
+                const result = await processVideoFrame(frameData, selectedDeviceId || "webcam")
                 setDetectionData(result)
                 setError(null)
             } catch (err) {
@@ -94,6 +184,11 @@ export function CameraFeed() {
             }
         }, 1000)
     }
+
+    useEffect(() => {
+        if (!isLive || sourceType !== "camera") return
+        void startWebcam()
+    }, [selectedDeviceId, sourceType])
 
     const stopProcessing = () => {
         if (processingIntervalRef.current) {
@@ -109,13 +204,49 @@ export function CameraFeed() {
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-base font-medium">Live Camera Feed</CardTitle>
                 <div className="flex items-center gap-2">
+                    <input
+                        ref={uploadInputRef}
+                        type="file"
+                        accept="video/mp4"
+                        aria-label="Upload MP4 video"
+                        onChange={handleUploadVideo}
+                        className="hidden"
+                    />
+                    <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => uploadInputRef.current?.click()}
+                        className="h-8 gap-1"
+                    >
+                        <Upload className="h-3.5 w-3.5" />
+                        Upload MP4
+                    </Button>
+                    <label htmlFor="camera-device" className="sr-only">Select camera</label>
+                    <select
+                        id="camera-device"
+                        value={selectedDeviceId}
+                        onChange={(event) => setSelectedDeviceId(event.target.value)}
+                        className="h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground"
+                        disabled={isStarting || sourceType === "upload"}
+                    >
+                        {videoDevices.length === 0 ? (
+                            <option value="default">Default camera</option>
+                        ) : (
+                            videoDevices.map((device, index) => (
+                                <option key={device.deviceId} value={device.deviceId}>
+                                    {device.label || `Camera ${index + 1}`}
+                                </option>
+                            ))
+                        )}
+                    </select>
                     {isLive && isProcessing ? (
                         <Badge variant="default" className="bg-red-500 hover:bg-red-600 animate-pulse">
-                            LIVE - AI PROCESSING
+                            {sourceType === "upload" ? "VIDEO - AI PROCESSING" : "LIVE - AI PROCESSING"}
                         </Badge>
                     ) : isLive ? (
                         <Badge variant="default" className="bg-green-500 hover:bg-green-600">
-                            LIVE
+                            {sourceType === "upload" ? "VIDEO" : "LIVE"}
                         </Badge>
                     ) : (
                         <Badge variant="outline">Offline</Badge>
@@ -129,7 +260,8 @@ export function CameraFeed() {
                         ref={videoRef}
                         autoPlay
                         playsInline
-                        muted
+                        controls={sourceType === "upload"}
+                        muted={sourceType === "camera"}
                         className={`w-full h-full object-contain ${isLive ? '' : 'hidden'}`}
                     />
                     <canvas ref={canvasRef} className="hidden" />
@@ -138,34 +270,52 @@ export function CameraFeed() {
                     {!isLive && (
                         <div className="absolute inset-0 flex flex-col items-center justify-center bg-black z-20">
                             <Camera className="h-16 w-16 text-white/40 mb-4" />
-                            <h3 className="text-white text-xl font-semibold mb-2">Camera Ready</h3>
+                            <h3 className="text-white text-xl font-semibold mb-2">Camera or Video Ready</h3>
                             <p className="text-gray-400 text-sm mb-6 max-w-sm text-center px-4">
-                                Click the button below to turn on your camera and start AI-powered queue detection
+                                Start your camera or upload an MP4 file to run AI-powered queue detection
                             </p>
-                            <Button
-                                onClick={startWebcam}
-                                size="lg"
-                                className="gap-2 text-base px-8 py-6"
-                                disabled={isStarting}
-                            >
-                                {isStarting ? (
-                                    <>
-                                        <Loader2 className="h-5 w-5 animate-spin" />
-                                        Requesting Camera Access...
-                                    </>
-                                ) : (
-                                    <>
-                                        <Video className="h-5 w-5" />
-                                        Start Camera
-                                    </>
-                                )}
-                            </Button>
+                            <div className="flex items-center gap-3">
+                                <Button
+                                    onClick={startWebcam}
+                                    size="lg"
+                                    className="gap-2 text-base px-6 py-6"
+                                    disabled={isStarting}
+                                >
+                                    {isStarting ? (
+                                        <>
+                                            <Loader2 className="h-5 w-5 animate-spin" />
+                                            Requesting Camera Access...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Video className="h-5 w-5" />
+                                            Start Camera
+                                        </>
+                                    )}
+                                </Button>
+                                <Button
+                                    type="button"
+                                    variant="secondary"
+                                    size="lg"
+                                    className="gap-2 text-base px-6 py-6"
+                                    onClick={() => uploadInputRef.current?.click()}
+                                >
+                                    <Upload className="h-5 w-5" />
+                                    Upload MP4
+                                </Button>
+                            </div>
                             {error && (
                                 <div className="mt-4 bg-red-900/80 border border-red-700 text-red-200 px-4 py-2 rounded-md text-sm max-w-md text-center">
                                     <AlertTriangle className="h-4 w-4 inline mr-2" />
                                     {error}
                                 </div>
                             )}
+                        </div>
+                    )}
+
+                    {isLive && sourceType === "upload" && uploadedVideoName && (
+                        <div className="absolute top-3 left-3 z-20 bg-black/70 text-white text-xs px-3 py-1.5 rounded backdrop-blur-sm">
+                            {uploadedVideoName}
                         </div>
                     )}
 
