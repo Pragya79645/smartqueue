@@ -5,6 +5,8 @@ import { CounterCard } from "@/components/counter-card"
 import { QueueGraph } from "@/components/queue-graph"
 import { PredictionCard } from "@/components/prediction-card"
 import { OptimizationCard } from "@/components/optimization-card"
+import { CameraFeed } from "@/components/camera-feed"
+import { AiDashboard } from "@/components/ai-dashboard"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -245,6 +247,16 @@ export default function DashboardPage() {
             <p className="text-sm text-muted-foreground mb-2">Critical Load</p>
             <p className="text-3xl font-bold text-destructive">{loading ? "..." : criticalCounters}</p>
           </div>
+        </div>
+
+        {/* Camera Feed Section */}
+        <div className="mb-8">
+          <CameraFeed />
+        </div>
+
+        {/* AI Analysis Dashboard */}
+        <div className="mb-8">
+          <AiDashboard />
         </div>
 
         {/* Prediction Card */}

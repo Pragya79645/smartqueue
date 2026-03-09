@@ -9,6 +9,7 @@ const queueRoutes = require('./routes/queueRoutes');
 const staffRoutes = require('./routes/staffRoutes');
 const allocationRoutes = require('./routes/allocationRoutes');
 const whatsappRoutes = require('./routes/whatsappRoutes');
+const aiRoutes = require('./routes/aiRoutes');
 
 const app = express();
 
@@ -39,6 +40,7 @@ app.use('/api/queue', queueRoutes);
 app.use('/api/staff', staffRoutes);
 app.use('/api/allocate', allocationRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
+app.use('/api/ai', aiRoutes);
 
 // Root endpoint
 app.get('/', (req, res) => {
@@ -49,7 +51,8 @@ app.get('/', (req, res) => {
       queue: '/api/queue',
       staff: '/api/staff',
       allocation: '/api/allocate',
-      whatsapp: '/api/whatsapp'
+      whatsapp: '/api/whatsapp',
+      ai: '/api/ai'
     }
   });
 });

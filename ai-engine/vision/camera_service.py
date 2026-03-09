@@ -44,7 +44,7 @@ class CameraService:
     def load_config(self):
         """Load configuration from environment variables or defaults"""
         self.camera_url = os.environ.get("CAMERA_URL", "0")
-        self.backend_url = os.environ.get("BACKEND_URL", "http://localhost:5000")
+        self.backend_url = os.environ.get("BACKEND_URL", "http://localhost:5001")
         self.model_path = os.environ.get("YOLO_MODEL_PATH", "../models/yolo_weights.pt")
         self.update_interval = float(os.environ.get("UPDATE_INTERVAL", "5.0"))
         

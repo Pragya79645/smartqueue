@@ -227,6 +227,15 @@ export default function SettingsPage() {
               <h3 className="text-lg font-semibold text-card-foreground mb-4">Quick Actions</h3>
               <div className="space-y-3">
                 <Button
+                  className="w-full justify-center gap-2"
+                  size="lg"
+                  onClick={handleSave}
+                  disabled={isSaving}
+                >
+                  <Save className="h-4 w-4" />
+                  {isSaving ? "Saving..." : "Save Settings"}
+                </Button>
+                <Button
                   className="w-full justify-start gap-2 bg-transparent"
                   variant="outline"
                   onClick={handleTestCamera}

@@ -51,7 +51,7 @@ class QueueDetector:
     def __init__(
         self,
         model_path: str = "../models/yolo_weights.pt",
-        backend_url: str = "http://localhost:5000",
+        backend_url: str = "http://localhost:5001",
         camera_source: str = "0",
         confidence_threshold: float = 0.5,
         display: bool = False
@@ -390,7 +390,7 @@ def main():
     parser.add_argument(
         '--backend', 
         type=str, 
-        default='http://localhost:5000',
+        default='http://localhost:5001',
         help='Backend API URL'
     )
     parser.add_argument(

@@ -4,28 +4,23 @@ import { useEffect, useRef, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Camera, AlertTriangle, Video } from "lucide-react"
+import { Camera, AlertTriangle, Video, Loader2 } from "lucide-react"
+import { processVideoFrame, FrameDetectionResponse } from "@/api/aiApi"
 
 export function CameraFeed() {
-    const [cameraUrl, setCameraUrl] = useState<string>("")
     const [isLive, setIsLive] = useState(false)
+    const [isProcessing, setIsProcessing] = useState(false)
+    const [isStarting, setIsStarting] = useState(false)
     const videoRef = useRef<HTMLVideoElement>(null)
+    const canvasRef = useRef<HTMLCanvasElement>(null)
     const streamRef = useRef<MediaStream | null>(null)
+    const processingIntervalRef = useRef<NodeJS.Timeout | null>(null)
+    const [detectionData, setDetectionData] = useState<FrameDetectionResponse | null>(null)
+    const [error, setError] = useState<string | null>(null)
 
     useEffect(() => {
-        const url = localStorage.getItem("camera_url")
-        if (url) {
-            setCameraUrl(url)
-            // If it's HTTP, we assume it might be live.
-            // If it's "0" or "webcam", we use local webcam.
-            if (url.startsWith("http")) {
-                setIsLive(true)
-            } else if (url === "0" || url.toLowerCase() === "webcam") {
-                startWebcam()
-            }
-        }
-
         return () => {
+            stopProcessing()
             if (streamRef.current) {
                 streamRef.current.getTracks().forEach(track => track.stop())
             }
@@ -33,129 +28,219 @@ export function CameraFeed() {
     }, [])
 
     const startWebcam = async () => {
+        setIsStarting(true)
+        setError(null)
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: true })
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                }
+            })
             if (videoRef.current) {
                 videoRef.current.srcObject = stream
                 streamRef.current = stream
                 setIsLive(true)
+                videoRef.current.onloadedmetadata = () => {
+                    startFrameProcessing()
+                }
+            } else {
+                // Video element not ready yet — stop the stream
+                stream.getTracks().forEach(track => track.stop())
+                setError("Video element not ready. Please try again.")
             }
-        } catch (err) {
+        } catch (err: any) {
             console.error("Error accessing webcam:", err)
             setIsLive(false)
+            if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                setError("Camera permission denied. Please allow camera access in your browser settings and try again.")
+            } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+                setError("No camera found. Please connect a camera and try again.")
+            } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+                setError("Camera is already in use by another application.")
+            } else {
+                setError(`Failed to access camera: ${err.message || 'Unknown error'}`)
+            }
+        } finally {
+            setIsStarting(false)
         }
     }
 
-    if (!cameraUrl) {
-        return (
-            <Card className="col-span-4 border-dashed">
-                <CardContent className="flex flex-col items-center justify-center py-10 text-center">
-                    <Camera className="h-10 w-10 text-muted-foreground mb-4" />
-                    <h3 className="text-lg font-semibold">No Camera Feed Configured</h3>
-                    <p className="text-sm text-muted-foreground max-w-sm mb-4">
-                        Please configure a camera URL in settings to enable live monitoring and AI analytics.
-                    </p>
-                </CardContent>
-            </Card>
-        )
+    const captureFrame = (): string | null => {
+        if (!videoRef.current || !canvasRef.current) return null
+        const video = videoRef.current
+        const canvas = canvasRef.current
+        canvas.width = video.videoWidth
+        canvas.height = video.videoHeight
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return null
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+        return canvas.toDataURL('image/jpeg', 0.8)
     }
 
-    const isWebcam = cameraUrl === "0" || cameraUrl.toLowerCase() === "webcam"
+    const startFrameProcessing = () => {
+        if (processingIntervalRef.current) return
+        setIsProcessing(true)
+        processingIntervalRef.current = setInterval(async () => {
+            const frameData = captureFrame()
+            if (!frameData) return
+            try {
+                const result = await processVideoFrame(frameData, 'webcam')
+                setDetectionData(result)
+                setError(null)
+            } catch (err) {
+                console.error("Frame processing error:", err)
+                // Don't overwrite error - just log it, detection is optional
+            }
+        }, 1000)
+    }
+
+    const stopProcessing = () => {
+        if (processingIntervalRef.current) {
+            clearInterval(processingIntervalRef.current)
+            processingIntervalRef.current = null
+        }
+        setIsProcessing(false)
+        setDetectionData(null)
+    }
 
     return (
-        <Card className="col-span-4 overflow-hidden">
+        <Card className="overflow-hidden">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-base font-medium">Live Camera Feed</CardTitle>
-                {isLive ? (
-                    <Badge variant="default" className="bg-red-500 hover:bg-red-600 animate-pulse">
-                        LIVE - AI PROCESSING
-                    </Badge>
-                ) : (
-                    <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2">
+                    {isLive && isProcessing ? (
+                        <Badge variant="default" className="bg-red-500 hover:bg-red-600 animate-pulse">
+                            LIVE - AI PROCESSING
+                        </Badge>
+                    ) : isLive ? (
+                        <Badge variant="default" className="bg-green-500 hover:bg-green-600">
+                            LIVE
+                        </Badge>
+                    ) : (
                         <Badge variant="outline">Offline</Badge>
-                        {isWebcam && (
-                            <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={startWebcam}>
-                                Retry Camera
-                            </Button>
-                        )}
-                    </div>
-                )}
+                    )}
+                </div>
             </CardHeader>
             <CardContent className="p-0">
-                <div className="relative aspect-video bg-black w-full flex items-center justify-center group">
-                    {cameraUrl.startsWith('http') ? (
-                        <>
-                            <img
-                                src={cameraUrl}
-                                alt="Live Feed"
-                                className="w-full h-full object-contain"
-                                onError={() => setIsLive(false)}
-                            />
-                            {/* Overlay for AI Bounding Boxes (Mock) */}
-                            {isLive && (
-                                <div className="absolute inset-0 pointer-events-none">
-                                    <div className="absolute top-1/4 left-1/4 w-24 h-48 border-2 border-green-500 rounded flex items-start justify-center">
-                                        <span className="bg-green-500 text-black text-[10px] px-1 font-bold">Person 92%</span>
-                                    </div>
-                                    <div className="absolute top-1/3 left-1/2 w-24 h-48 border-2 border-green-500 rounded flex items-start justify-center">
-                                        <span className="bg-green-500 text-black text-[10px] px-1 font-bold">Person 88%</span>
-                                    </div>
-                                    <div className="absolute bottom-4 left-4">
-                                        <div className="bg-black/50 text-white text-xs px-2 py-1 rounded backdrop-blur-sm">
-                                            Detected: 2 People | Queue Density: Low
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
-                        </>
-                    ) : isWebcam ? (
-                        <div className="relative w-full h-full group">
-                            <video
-                                ref={videoRef}
-                                autoPlay
-                                playsInline
-                                muted
-                                className="w-full h-full object-contain"
-                            />
-                            {!isLive && (
-                                <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-20">
-                                    <Button onClick={startWebcam} variant="secondary">
-                                        <Camera className="mr-2 h-4 w-4" />
+                <div className="relative aspect-video bg-black w-full flex items-center justify-center">
+                    {/* Video & canvas are ALWAYS in the DOM so refs work */}
+                    <video
+                        ref={videoRef}
+                        autoPlay
+                        playsInline
+                        muted
+                        className={`w-full h-full object-contain ${isLive ? '' : 'hidden'}`}
+                    />
+                    <canvas ref={canvasRef} className="hidden" />
+
+                    {/* Start Camera Overlay — shown when not live */}
+                    {!isLive && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black z-20">
+                            <Camera className="h-16 w-16 text-white/40 mb-4" />
+                            <h3 className="text-white text-xl font-semibold mb-2">Camera Ready</h3>
+                            <p className="text-gray-400 text-sm mb-6 max-w-sm text-center px-4">
+                                Click the button below to turn on your camera and start AI-powered queue detection
+                            </p>
+                            <Button
+                                onClick={startWebcam}
+                                size="lg"
+                                className="gap-2 text-base px-8 py-6"
+                                disabled={isStarting}
+                            >
+                                {isStarting ? (
+                                    <>
+                                        <Loader2 className="h-5 w-5 animate-spin" />
+                                        Requesting Camera Access...
+                                    </>
+                                ) : (
+                                    <>
+                                        <Video className="h-5 w-5" />
                                         Start Camera
-                                    </Button>
-                                </div>
-                            )}
-                            {/* Overlay for AI Bounding Boxes (Mock for Webcam) */}
-                            {isLive && (
-                                <div className="absolute inset-0 pointer-events-none z-10">
-                                    <div className="absolute top-1/4 left-1/4 w-24 h-48 border-2 border-green-500 rounded flex items-start justify-center">
-                                        <span className="bg-green-500 text-black text-[10px] px-1 font-bold">Person 92%</span>
-                                    </div>
-                                    <div className="absolute top-1/3 left-1/2 w-24 h-48 border-2 border-green-500 rounded flex items-start justify-center">
-                                        <span className="bg-green-500 text-black text-[10px] px-1 font-bold">Person 88%</span>
-                                    </div>
-                                    <div className="absolute bottom-4 left-4">
-                                        <div className="bg-black/50 text-white text-xs px-2 py-1 rounded backdrop-blur-sm">
-                                            Detected: 2 People | Queue Density: Low
-                                        </div>
-                                    </div>
+                                    </>
+                                )}
+                            </Button>
+                            {error && (
+                                <div className="mt-4 bg-red-900/80 border border-red-700 text-red-200 px-4 py-2 rounded-md text-sm max-w-md text-center">
+                                    <AlertTriangle className="h-4 w-4 inline mr-2" />
+                                    {error}
                                 </div>
                             )}
                         </div>
-                    ) : (
-                        <div className="text-center p-8">
-                            <Camera className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                            <p className="text-white font-medium mb-1">RTSP Stream Active</p>
-                            <p className="text-xs text-zinc-400 font-mono mb-4">{cameraUrl}</p>
-                            <div className="bg-zinc-900 border border-zinc-800 rounded p-4 max-w-md mx-auto text-left">
-                                <div className="flex items-center gap-2 mb-2">
-                                    <AlertTriangle className="h-4 w-4 text-yellow-500" />
-                                    <p className="text-xs text-zinc-300">Browser Playback Not Supported</p>
+                    )}
+
+                    {/* Real-time AI Detection Overlay */}
+                    {isLive && detectionData && detectionData.success && (
+                        <div className="absolute inset-0 pointer-events-none z-10">
+                            <svg className="w-full h-full">
+                                {detectionData.detections.map((detection, idx) => {
+                                    const [x1, y1, x2, y2] = detection.bbox
+                                    const video = videoRef.current
+                                    if (!video) return null
+
+                                    const scaleX = video.clientWidth / detectionData.frame_size[0]
+                                    const scaleY = video.clientHeight / detectionData.frame_size[1]
+
+                                    const displayX1 = x1 * scaleX
+                                    const displayY1 = y1 * scaleY
+                                    const displayWidth = (x2 - x1) * scaleX
+                                    const displayHeight = (y2 - y1) * scaleY
+
+                                    const color = detection.confidence > 0.7 ? '#22c55e' : '#eab308'
+
+                                    return (
+                                        <g key={idx}>
+                                            <rect
+                                                x={displayX1}
+                                                y={displayY1}
+                                                width={displayWidth}
+                                                height={displayHeight}
+                                                fill="none"
+                                                stroke={color}
+                                                strokeWidth="2"
+                                                rx="4"
+                                            />
+                                            <rect
+                                                x={displayX1}
+                                                y={displayY1 - 20}
+                                                width={Math.max(80, displayWidth * 0.5)}
+                                                height="20"
+                                                fill={color}
+                                                rx="2"
+                                            />
+                                            <text
+                                                x={displayX1 + 4}
+                                                y={displayY1 - 6}
+                                                fill="#000"
+                                                fontSize="11"
+                                                fontWeight="bold"
+                                                fontFamily="system-ui"
+                                            >
+                                                {detection.class} {Math.round(detection.confidence * 100)}%
+                                            </text>
+                                        </g>
+                                    )
+                                })}
+                            </svg>
+                            <div className="absolute bottom-4 left-4 right-4 flex flex-wrap gap-2">
+                                <div className="bg-black/70 text-white text-xs px-3 py-1.5 rounded backdrop-blur-sm">
+                                    People Detected: {detectionData.total_people}
                                 </div>
-                                <p className="text-xs text-zinc-500">
-                                    RTSP streams are being processed by the backend AI engine.
-                                    Analytics results will appear in the dashboard metrics.
-                                </p>
+                                {Object.entries(detectionData.counters).map(([counterId, info]) => {
+                                    const statusColors: Record<string, string> = {
+                                        normal: 'bg-green-500/80',
+                                        busy: 'bg-yellow-500/80',
+                                        critical: 'bg-red-500/80'
+                                    }
+                                    return (
+                                        <div
+                                            key={counterId}
+                                            className={`${statusColors[info.status] || 'bg-gray-500/80'} text-white text-xs px-3 py-1.5 rounded backdrop-blur-sm font-semibold`}
+                                        >
+                                            Counter {counterId}: {info.count}
+                                        </div>
+                                    )
+                                })}
                             </div>
                         </div>
                     )}
