@@ -16,8 +16,9 @@ const app = express();
 // Middleware
 app.use(helmet()); // Security headers
 app.use(cors()); // Enable CORS
-app.use(express.json()); // Parse JSON bodies
-app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
+// Increase body size limits to accept larger video/frame payloads
+app.use(express.json({ limit: '20mb' })); // Parse JSON bodies (up from default 100kb)
+app.use(express.urlencoded({ extended: true, limit: '20mb' })); // Parse URL-encoded bodies
 
 // HTTP request logger
 app.use(morgan('combined', {

@@ -8,6 +8,30 @@ import { Camera, AlertTriangle, Video, Loader2, Upload } from "lucide-react"
 import { processVideoFrame, FrameDetectionResponse } from "@/api/aiApi"
 
 export function CameraFeed() {
+    const [editMode, setEditMode] = useState(false)
+    const [counters, setCounters] = useState<Array<{ id: number; x: number; y: number; label?: string; area?: Array<{ x: number; y: number }> }>>([])
+    const [selectedCounterId, setSelectedCounterId] = useState<number | null>(null)
+    const [drawingForId, setDrawingForId] = useState<number | null>(null)
+    const [hoverPoint, setHoverPoint] = useState<{ x: number; y: number } | null>(null)
+
+    const COUNTERS_LS_KEY = 'cameraCounters'
+
+    useEffect(() => {
+        try {
+            const raw = localStorage.getItem(COUNTERS_LS_KEY)
+            if (raw) setCounters(JSON.parse(raw))
+        } catch (e) {
+            // ignore
+        }
+    }, [])
+
+    useEffect(() => {
+        try {
+            localStorage.setItem(COUNTERS_LS_KEY, JSON.stringify(counters))
+        } catch (e) {
+            // ignore
+        }
+    }, [counters])
     const [isLive, setIsLive] = useState(false)
     const [isProcessing, setIsProcessing] = useState(false)
     const [isStarting, setIsStarting] = useState(false)
@@ -199,11 +223,134 @@ export function CameraFeed() {
         setDetectionData(null)
     }
 
+    const pointInPolygon = (pt: { x: number; y: number }, polygon: Array<{ x: number; y: number }>) => {
+        let inside = false
+        for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+            const xi = polygon[i].x, yi = polygon[i].y
+            const xj = polygon[j].x, yj = polygon[j].y
+            const intersect = ((yi > pt.y) !== (yj > pt.y)) && (pt.x < (xj - xi) * (pt.y - yi) / (yj - yi + 0.0000001) + xi)
+            if (intersect) inside = !inside
+        }
+        return inside
+    }
+
+    const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {
+        if (!editMode) return
+        const el = e.currentTarget.getBoundingClientRect()
+        const cx = (e.clientX - el.left) / el.width
+        const cy = (e.clientY - el.top) / el.height
+
+        // If we're drawing an area for a counter, add a point
+        if (drawingForId != null) {
+            setCounters(prev => prev.map(c => {
+                if (c.id !== drawingForId) return c
+                const area = c.area ? [...c.area, { x: cx, y: cy }] : [{ x: cx, y: cy }]
+                return { ...c, area }
+            }))
+            return
+        }
+
+        // Not drawing: move nearest counter or create one
+        if (counters.length === 0) {
+            setCounters([{ id: 1, x: cx, y: cy }])
+            setSelectedCounterId(1)
+            return
+        }
+
+        let nearestIdx = 0
+        let nearestDist = Infinity
+        counters.forEach((c, i) => {
+            const dx = c.x - cx
+            const dy = c.y - cy
+            const d = Math.sqrt(dx * dx + dy * dy)
+            if (d < nearestDist) {
+                nearestDist = d
+                nearestIdx = i
+            }
+        })
+
+        setCounters(prev => {
+            const next = prev.map((c, i) => ({ ...c }))
+            next[nearestIdx].x = cx
+            next[nearestIdx].y = cy
+            return next
+        })
+        setSelectedCounterId(counters[nearestIdx].id)
+    }
+
     return (
         <Card className="overflow-hidden">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-base font-medium">Live Camera Feed</CardTitle>
                 <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2">
+                        <label className="flex items-center gap-2 text-xs">
+                            <input type="checkbox" checked={editMode} onChange={() => { setEditMode(v => !v); setSelectedCounterId(null) }} />
+                            <span className="ml-1">Edit Counters</span>
+                        </label>
+                        {editMode && (
+                            <div className="flex items-center gap-2">
+                                <label className="text-xs">Counters:</label>
+                                <input
+                                    aria-label="Number of counters"
+                                    type="number"
+                                    min={0}
+                                    value={counters.length}
+                                    onChange={(e) => {
+                                        const n = Math.max(0, Math.floor(Number(e.target.value) || 0))
+                                        setCounters(prev => {
+                                            if (n === prev.length) return prev
+                                            if (n > prev.length) {
+                                                const next = [...prev]
+                                                for (let i = prev.length; i < n; i++) {
+                                                    next.push({ id: i + 1, x: 0.12 + 0.12 * i, y: 0.75 })
+                                                }
+                                                return next
+                                            }
+                                            return prev.slice(0, n)
+                                        })
+                                    }}
+                                    className="w-16 h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground"
+                                />
+                                <Button size="sm" variant="outline" onClick={() => { localStorage.removeItem(COUNTERS_LS_KEY); setCounters([]) }}>Clear</Button>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Templates & quick tools */}
+                    {editMode && (
+                        <div className="flex items-center gap-2">
+                            <label className="text-xs">Templates</label>
+                            <select
+                                value={''}
+                                onChange={(e) => {
+                                    const val = e.target.value
+                                    if (val === '2-lr') {
+                                        setCounters([{ id: 1, x: 0.15, y: 0.75, label: 'Left' }, { id: 2, x: 0.85, y: 0.75, label: 'Right' }])
+                                    } else if (val === '3-row') {
+                                        setCounters([{ id: 1, x: 0.15, y: 0.75, label: '1' }, { id: 2, x: 0.5, y: 0.75, label: '2' }, { id: 3, x: 0.85, y: 0.75, label: '3' }])
+                                    } else if (val === 'entry-exit') {
+                                        setCounters([{ id: 1, x: 0.2, y: 0.9, label: 'Entry' }, { id: 2, x: 0.8, y: 0.9, label: 'Exit' }])
+                                    }
+                                    // reset select
+                                    e.currentTarget.value = ''
+                                }}
+                                className="h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground"
+                            >
+                                <option value="">Choose…</option>
+                                <option value="2-lr">2 Counters (Left/Right)</option>
+                                <option value="3-row">3 Counters (Across)</option>
+                                <option value="entry-exit">Entry / Exit</option>
+                            </select>
+                            <Button size="sm" variant="outline" onClick={() => { navigator.clipboard?.writeText(JSON.stringify(counters)); }}>Export</Button>
+                            <Button size="sm" variant="outline" onClick={async () => {
+                                try {
+                                    const txt = await navigator.clipboard?.readText()
+                                    if (txt) setCounters(JSON.parse(txt))
+                                } catch { }
+                            }}>Import</Button>
+                        </div>
+                    )}
                     <input
                         ref={uploadInputRef}
                         type="file"
@@ -266,8 +413,8 @@ export function CameraFeed() {
                     />
                     <canvas ref={canvasRef} className="hidden" />
 
-                    {/* Start Camera Overlay — shown when not live */}
-                    {!isLive && (
+                    {/* Start Camera Overlay — shown when not live (hidden if editing) */}
+                    {!isLive && !editMode && (
                         <div className="absolute inset-0 flex flex-col items-center justify-center bg-black z-20">
                             <Camera className="h-16 w-16 text-white/40 mb-4" />
                             <h3 className="text-white text-xl font-semibold mb-2">Camera or Video Ready</h3>
@@ -316,6 +463,106 @@ export function CameraFeed() {
                     {isLive && sourceType === "upload" && uploadedVideoName && (
                         <div className="absolute top-3 left-3 z-20 bg-black/70 text-white text-xs px-3 py-1.5 rounded backdrop-blur-sm">
                             {uploadedVideoName}
+                        </div>
+                    )}
+
+                    {/* Counter markers / edit overlay */}
+                    {(isLive || editMode) && (editMode || counters.length > 0) && (
+                        <div
+                            className="absolute inset-0 z-20"
+                            onClick={handleOverlayClick}
+                            onMouseMove={(e) => {
+                                if (!editMode || drawingForId == null) return
+                                const el = (e.currentTarget as HTMLDivElement).getBoundingClientRect()
+                                const cx = (e.clientX - el.left) / el.width
+                                const cy = (e.clientY - el.top) / el.height
+                                setHoverPoint({ x: cx, y: cy })
+                            }}
+                            onMouseLeave={() => { if (drawingForId != null) setHoverPoint(null) }}
+                            style={{ cursor: editMode ? 'crosshair' : 'default' }}
+                        >
+                            <svg viewBox="0 0 1 1" preserveAspectRatio="none" className="w-full h-full pointer-events-auto">
+                                {counters.map((c) => (
+                                    <g key={c.id} onClick={(ev) => { ev.stopPropagation(); setSelectedCounterId(c.id) }}>
+                                        {c.area && c.area.length >= 3 && (
+                                            <polygon
+                                                points={c.area.map(p => `${p.x},${p.y}`).join(' ')}
+                                                fill={selectedCounterId === c.id ? 'rgba(255,123,123,0.18)' : 'rgba(59,130,246,0.12)'}
+                                                stroke={selectedCounterId === c.id ? '#ff7b7b' : '#3b82f6'}
+                                                strokeWidth={0.002}
+                                            />
+                                        )}
+                                        {/* live polyline preview when drawing for this counter */}
+                                        {drawingForId === c.id && (
+                                            <>
+                                                <polyline
+                                                    points={((c.area || []).map(p => `${p.x},${p.y}`).concat(hoverPoint ? `${hoverPoint.x},${hoverPoint.y}` : [])).join(' ')}
+                                                    fill="none"
+                                                    stroke="#ff7b7b"
+                                                    strokeWidth={0.002}
+                                                    strokeDasharray="0.004"
+                                                />
+                                            </>
+                                        )}
+                                        <circle cx={c.x} cy={c.y} r={0.02} fill={selectedCounterId === c.id ? '#ff7b7b' : '#3b82f6'} stroke="#fff" strokeWidth={0.002} />
+                                        <text x={c.x + 0.025} y={c.y + 0.005} fill="#fff" fontSize="0.03" fontWeight="600">{c.label || `#${c.id}`}</text>
+                                        {c.area && c.area.map((p, i) => (
+                                            <circle key={i} cx={p.x} cy={p.y} r={0.01} fill="#fff" stroke="#000" strokeWidth={0.001} />
+                                        ))}
+                                    </g>
+                                ))}
+                            </svg>
+
+                            {/* Legend & quick help */}
+                            <div className="absolute left-3 bottom-3 z-30 text-xs text-white">
+                                <div className="bg-black/70 px-3 py-2 rounded-md backdrop-blur-sm">
+                                    <div className="flex items-center gap-2">
+                                        <div className="w-3 h-3 rounded bg-blue-500" />
+                                        <div>Counter marker</div>
+                                    </div>
+                                    <div className="flex items-center gap-2 mt-2">
+                                        <div className="w-3 h-3 rounded bg-yellow-500" />
+                                        <div>AI-detected (backend)</div>
+                                    </div>
+                                    {editMode && (
+                                        <div className="mt-2 text-xs text-gray-200">
+                                            Click a marker to select. Use "Start Area" then click to add vertices. "Undo Point" removes last vertex.
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                            {/* If editing when not live, show small instruction */}
+                            {!isLive && editMode && (
+                                <div className="absolute inset-0 flex items-center justify-center z-25 pointer-events-none">
+                                    <div className="bg-black/60 text-white px-3 py-2 rounded-md text-sm">Edit mode active — click to place counters on the frame placeholder</div>
+                                </div>
+                            )}
+
+                            {selectedCounterId != null && editMode && (
+                                <div className="absolute top-3 right-3 z-30 bg-black/80 text-white p-2 rounded-md backdrop-blur-sm text-xs">
+                                    <div className="flex items-center gap-2">
+                                        <label className="text-xs">Label</label>
+                                        <input
+                                            value={(counters.find(x => x.id === selectedCounterId)?.label) || ''}
+                                            onChange={(e) => setCounters(prev => prev.map(p => p.id === selectedCounterId ? { ...p, label: e.target.value } : p))}
+                                            className="text-xs px-2 py-1 rounded bg-black/50 border border-white/20"
+                                        />
+                                    </div>
+                                    <div className="mt-2 flex gap-2 items-center">
+                                        <Button size="xs" variant="outline" onClick={() => setSelectedCounterId(null)}>Done</Button>
+                                        <Button size="xs" variant="destructive" onClick={() => setCounters(prev => prev.filter(p => p.id !== selectedCounterId))}>Delete</Button>
+                                        {drawingForId === selectedCounterId ? (
+                                            <>
+                                                <Button size="xs" variant="ghost" onClick={() => { setDrawingForId(null); setHoverPoint(null) }}>Finish Area</Button>
+                                                <Button size="xs" variant="outline" onClick={() => setCounters(prev => prev.map(p => p.id === selectedCounterId ? { ...p, area: [] } : p))}>Clear Area</Button>
+                                                <Button size="xs" variant="outline" onClick={() => setCounters(prev => prev.map(p => p.id === selectedCounterId ? { ...p, area: p.area ? p.area.slice(0, -1) : [] } : p))}>Undo Point</Button>
+                                            </>
+                                        ) : (
+                                            <Button size="xs" variant="secondary" onClick={() => setDrawingForId(selectedCounterId)}>Start Area</Button>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
 
@@ -376,21 +623,44 @@ export function CameraFeed() {
                                 <div className="bg-black/70 text-white text-xs px-3 py-1.5 rounded backdrop-blur-sm">
                                     People Detected: {detectionData.total_people}
                                 </div>
-                                {Object.entries(detectionData.counters).map(([counterId, info]) => {
-                                    const statusColors: Record<string, string> = {
-                                        normal: 'bg-green-500/80',
-                                        busy: 'bg-yellow-500/80',
-                                        critical: 'bg-red-500/80'
-                                    }
-                                    return (
-                                        <div
-                                            key={counterId}
-                                            className={`${statusColors[info.status] || 'bg-gray-500/80'} text-white text-xs px-3 py-1.5 rounded backdrop-blur-sm font-semibold`}
-                                        >
-                                            Counter {counterId}: {info.count}
-                                        </div>
-                                    )
-                                })}
+                                {/** If user-drawn areas exist, compute counts based on polygon membership */}
+                                {counters.length > 0 ? (
+                                    counters.map(c => {
+                                        let count = 0
+                                        if (c.area && c.area.length >= 3) {
+                                            // compute counts from detections
+                                            detectionData.detections.forEach(d => {
+                                                if (!d.class || d.class.toLowerCase() !== 'person') return
+                                                const [ax, ay, bx, by] = d.bbox
+                                                const cx = (ax + bx) / 2 / detectionData.frame_size[0]
+                                                const cy = (ay + by) / 2 / detectionData.frame_size[1]
+                                                if (pointInPolygon({ x: cx, y: cy }, c.area!)) count++
+                                            })
+                                        }
+                                        const statusColor = count > 5 ? 'bg-red-500/80' : (count > 2 ? 'bg-yellow-500/80' : 'bg-green-500/80')
+                                        return (
+                                            <div key={c.id} className={`${statusColor} text-white text-xs px-3 py-1.5 rounded backdrop-blur-sm font-semibold`}>
+                                                {c.label || `Counter ${c.id}`}: {count}
+                                            </div>
+                                        )
+                                    })
+                                ) : (
+                                    Object.entries(detectionData.counters).map(([counterId, info]) => {
+                                        const statusColors: Record<string, string> = {
+                                            normal: 'bg-green-500/80',
+                                            busy: 'bg-yellow-500/80',
+                                            critical: 'bg-red-500/80'
+                                        }
+                                        return (
+                                            <div
+                                                key={counterId}
+                                                className={`${statusColors[info.status] || 'bg-gray-500/80'} text-white text-xs px-3 py-1.5 rounded backdrop-blur-sm font-semibold`}
+                                            >
+                                                Counter {counterId}: {info.count}
+                                            </div>
+                                        )
+                                    })
+                                )}
                             </div>
                         </div>
                     )}
