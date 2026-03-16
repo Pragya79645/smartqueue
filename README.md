@@ -24,7 +24,7 @@ http://localhost:3000/dashboard
 **Services:**
 - Frontend: http://localhost:3000
 - Backend: http://localhost:3001
-- AI Engine: http://localhost:8000
+- AI Engine: http://localhost:8001
 
 ---
 
@@ -157,7 +157,7 @@ pnpm install
 ```env
 PORT=3001
 MONGODB_URI=mongodb://localhost:27017/queue-intelligence
-PYTHON_API_URL=http://localhost:8000
+PYTHON_API_URL=http://localhost:8001
 
 # Optional WhatsApp
 WHATSAPP_API_URL=https://graph.facebook.com/v18.0
@@ -168,7 +168,7 @@ WHATSAPP_TOKEN=your_access_token
 ### Frontend Environment (.env.local)
 ```env
 NEXT_PUBLIC_BACKEND_URL=http://localhost:3001
-NEXT_PUBLIC_AI_ENGINE_URL=http://localhost:8000
+NEXT_PUBLIC_AI_ENGINE_URL=http://localhost:8001
 ```
 
 ---
@@ -337,7 +337,7 @@ curl http://localhost:3001/api/queue/predict?minutesAhead=15
 ### AI Engine Not Responding
 ```bash
 # Check health
-curl http://localhost:8000/health
+curl http://localhost:8001/health
 
 # Restart
 cd ai-engine
@@ -347,7 +347,7 @@ python api/flask_server.py
 
 ### Backend Can't Reach AI Engine
 - Verify `PYTHON_API_URL` in backend/.env
-- Check Flask is running on port 8000
+- Check Flask is running on port 8001
 
 ### No Queue Data
 - Start queue detection

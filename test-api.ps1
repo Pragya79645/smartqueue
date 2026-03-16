@@ -5,7 +5,7 @@ Write-Host "Testing /health endpoint" -ForegroundColor Yellow
 Write-Host "==================================================`n" -ForegroundColor Cyan
 
 try {
-    $response = Invoke-RestMethod -Uri "http://localhost:8000/health" -Method Get
+    $response = Invoke-RestMethod -Uri "http://localhost:8001/health" -Method Get
     Write-Host "SUCCESS!" -ForegroundColor Green
     $response | ConvertTo-Json -Depth 10
 } catch {
@@ -24,7 +24,7 @@ $predictBody = @{
 } | ConvertTo-Json
 
 try {
-    $response = Invoke-RestMethod -Uri "http://localhost:8000/predict" -Method Post -Body $predictBody -ContentType "application/json"
+    $response = Invoke-RestMethod -Uri "http://localhost:8001/predict" -Method Post -Body $predictBody -ContentType "application/json"
     Write-Host "SUCCESS!" -ForegroundColor Green
     $response | ConvertTo-Json -Depth 10
 } catch {
@@ -91,7 +91,7 @@ $optimizeBody = @{
 } | ConvertTo-Json -Depth 10
 
 try {
-    $response = Invoke-RestMethod -Uri "http://localhost:8000/optimize" -Method Post -Body $optimizeBody -ContentType "application/json"
+    $response = Invoke-RestMethod -Uri "http://localhost:8001/optimize" -Method Post -Body $optimizeBody -ContentType "application/json"
     Write-Host "SUCCESS!" -ForegroundColor Green
     $response | ConvertTo-Json -Depth 10
 } catch {

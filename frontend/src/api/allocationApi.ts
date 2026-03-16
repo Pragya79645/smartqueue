@@ -4,7 +4,7 @@
  */
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
-const AI_ENGINE_URL = process.env.NEXT_PUBLIC_AI_ENGINE_URL || 'http://localhost:8000';
+const AI_ENGINE_URL = process.env.NEXT_PUBLIC_AI_ENGINE_URL || 'http://localhost:8001';
 
 interface AllocationRequest {
   currentQueueLoad: Record<string, number>;
@@ -22,7 +22,11 @@ export async function allocateNow(request?: Partial<AllocationRequest>) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request || {}),
   });
-  if (!response.ok) throw new Error('Failed to generate allocation');
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const details = errorData.details || errorData.error || 'Unknown error';
+    throw new Error(`Failed to generate allocation: ${details}`);
+  }
   return response.json();
 }
 

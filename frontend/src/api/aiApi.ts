@@ -4,7 +4,7 @@
  */
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
-const AI_ENGINE_URL = process.env.NEXT_PUBLIC_AI_ENGINE_URL || 'http://localhost:8000';
+const AI_ENGINE_URL = process.env.NEXT_PUBLIC_AI_ENGINE_URL || 'http://localhost:8001';
 
 /**
  * Get comprehensive AI analysis (prediction + current state)
@@ -249,7 +249,18 @@ export async function processVideoFrame(
     }),
   });
   if (!response.ok) {
-    throw new Error('Failed to process video frame');
+    let errorMessage = 'Failed to process video frame';
+    try {
+      const errorBody = await response.json();
+      if (errorBody?.message) {
+        errorMessage = `Failed to process video frame: ${errorBody.message}`;
+      } else if (errorBody?.error) {
+        errorMessage = `Failed to process video frame: ${errorBody.error}`;
+      }
+    } catch {
+      // Keep default message if response body isn't JSON
+    }
+    throw new Error(errorMessage);
   }
   return response.json();
 }

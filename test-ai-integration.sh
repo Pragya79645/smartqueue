@@ -26,7 +26,7 @@ echo "Checking services..."
 ai_running=0
 backend_running=0
 
-if check_service "http://localhost:8000/health" "AI Engine"; then
+if check_service "http://localhost:8001/health" "AI Engine"; then
     ai_running=1
 fi
 

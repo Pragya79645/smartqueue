@@ -9,7 +9,7 @@ echo ""
 echo "[1/4] Starting AI Engine (Flask)..."
 cd ai-engine
 conda activate queue-ai
-python api/flask_server.py &
+AI_ENGINE_PORT=8001 python api/flask_server.py &
 AI_PID=$!
 cd ..
 sleep 3
@@ -36,7 +36,7 @@ echo "All services started!"
 echo "========================================"
 echo ""
 echo "Services:"
-echo "  - AI Engine:  http://localhost:8000"
+echo "  - AI Engine:  http://localhost:8001"
 echo "  - Backend:    http://localhost:3001"
 echo "  - Frontend:   http://localhost:3000"
 echo ""

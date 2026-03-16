@@ -6,7 +6,7 @@
 const axios = require('axios');
 
 const BACKEND_URL = 'http://localhost:5001/api';
-const AI_ENGINE_URL = 'http://localhost:8000';
+const AI_ENGINE_URL = 'http://localhost:8001';
 
 // Colors for console output
 const colors = {

@@ -10,7 +10,7 @@ from datetime import datetime
 
 # Configuration
 BACKEND_URL = "http://localhost:5000"
-AI_ENGINE_URL = "http://localhost:8000"
+AI_ENGINE_URL = "http://localhost:8001"
 FRONTEND_URL = "http://localhost:3000"
 
 def print_section(title):

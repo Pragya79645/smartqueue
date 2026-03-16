@@ -20,4 +20,7 @@ router.get('/stats', allocationController.getAllocationStats);
 // GET /allocate/requirement - Calculate staff requirement
 router.get('/requirement', allocationController.getStaffRequirement);
 
+// GET /allocate/diagnostic - Diagnostic information
+router.get('/diagnostic', allocationController.getDiagnostic);
+
 module.exports = router;

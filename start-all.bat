@@ -6,7 +6,7 @@ echo.
 
 :: Start AI Engine (Flask Server)
 echo [1/4] Starting AI Engine (Flask)...
-start "AI Engine" cmd /k "cd ai-engine && conda activate queue-ai && python api/flask_server.py"
+start "AI Engine" cmd /k "cd ai-engine && conda activate queue-ai && set AI_ENGINE_PORT=8001 && python api/flask_server.py"
 timeout /t 3 /nobreak >nul
 
 :: Start Backend (Node.js/Express)
@@ -25,7 +25,7 @@ echo All services started!
 echo ========================================
 echo.
 echo Services:
-echo   - AI Engine:  http://localhost:8000
+echo   - AI Engine:  http://localhost:8001
 echo   - Backend:    http://localhost:3001
 echo   - Frontend:   http://localhost:3000
 echo.

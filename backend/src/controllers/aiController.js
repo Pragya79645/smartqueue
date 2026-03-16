@@ -2,7 +2,7 @@ const axios = require('axios');
 const logger = require('../utils/logger');
 
 // Python AI Engine URL
-const AI_ENGINE_URL = process.env.PYTHON_API_URL || 'http://localhost:8000';
+const AI_ENGINE_URL = process.env.PYTHON_API_URL || 'http://localhost:8001';
 
 /**
  * GET /ai/analyze - Get comprehensive AI analysis
@@ -267,13 +267,18 @@ exports.processFrame = async (req, res) => {
     });
     
   } catch (error) {
-    logger.error('Frame processing error:', error.message);
+    const statusCode = error.response?.status || 500;
+    const engineError = error.response?.data?.error;
+    const engineMessage = error.response?.data?.message;
+    const details = engineError || engineMessage || error.message;
+
+    logger.error(`Frame processing error (${statusCode}): ${details}`);
     
     // Return error but don't crash
-    res.status(error.response?.status || 500).json({
+    res.status(statusCode).json({
       success: false,
       error: 'Failed to process frame',
-      message: error.message
+      message: details
     });
   }
 };

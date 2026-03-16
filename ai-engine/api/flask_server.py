@@ -27,11 +27,19 @@ from optimization.staff_optimizer import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+def _truthy_env(value):
+    """Interpret common env var truthy values."""
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
 # ==========================================
 #   INITIALIZE FLASK APP
 # ==========================================
 app = Flask(__name__)
 CORS(app)  # Enable CORS for frontend
+AI_ENGINE_PORT = int(os.getenv('AI_ENGINE_PORT', os.getenv('PORT', '8001')))
 
 # ==========================================
 #   LOAD MODELS ONCE (Global)
@@ -46,13 +54,61 @@ optimizer = StaffOptimizer()
 print("✓ Staff optimizer initialized")
 
 # Load YOLO model for frame detection
-try:
-    from ultralytics import YOLO
-    yolo_model = YOLO('yolov8n.pt')
-    print("✓ YOLO model loaded for frame detection")
-except Exception as e:
-    logger.warning(f"YOLO model not loaded: {e}")
-    yolo_model = None
+yolo_model = None
+yolo_model_path = None
+yolo_init_error = None
+
+
+def _get_yolo_candidates():
+    """Build an ordered list of candidate model paths."""
+    api_dir = os.path.dirname(os.path.abspath(__file__))
+    engine_dir = os.path.dirname(api_dir)
+    env_model_path = os.getenv('AI_YOLO_MODEL_PATH')
+
+    candidates = []
+    if env_model_path:
+        candidates.append(os.path.abspath(env_model_path))
+
+    candidates.extend([
+        os.path.join(api_dir, 'yolov8n.pt'),
+        os.path.join(engine_dir, 'yolov8n.pt'),
+        os.path.join(engine_dir, 'models', 'yolo_weights.pt'),
+    ])
+    return candidates
+
+
+def load_yolo_model(force=False):
+    """Load YOLO once; optionally force a reload."""
+    global yolo_model, yolo_model_path, yolo_init_error
+
+    if yolo_model is not None and not force:
+        return True
+
+    try:
+        from ultralytics import YOLO
+
+        model_candidates = _get_yolo_candidates()
+        selected_path = next((path for path in model_candidates if os.path.exists(path)), None)
+        if not selected_path:
+            raise FileNotFoundError(
+                f"No YOLO weights found. Checked: {', '.join(model_candidates)}"
+            )
+
+        yolo_model = YOLO(selected_path)
+        yolo_model_path = selected_path
+        yolo_init_error = None
+        logger.info(f"YOLO model loaded for frame detection: {selected_path}")
+        return True
+    except Exception as e:
+        yolo_model = None
+        yolo_model_path = None
+        yolo_init_error = str(e)
+        logger.warning(f"YOLO model not loaded: {yolo_init_error}")
+        return False
+
+
+# Try loading on startup but allow lazy retry later.
+load_yolo_model()
 
 
 # ==========================================
@@ -61,10 +117,22 @@ except Exception as e:
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint to verify API is running"""
-    return jsonify({
+    yolo_loaded = yolo_model is not None
+    include_debug = _truthy_env(os.getenv('AI_HEALTH_DEBUG'))
+
+    response = {
         "status": "healthy",
         "message": "AI Engine API is running",
-        "models_loaded": True
+        "models_loaded": True,
+        "yolo_loaded": yolo_loaded
+    }
+
+    if include_debug:
+        response["yolo_model_path"] = yolo_model_path
+        response["yolo_init_error"] = yolo_init_error
+
+    return jsonify({
+        **response
     }), 200
 
 
@@ -298,9 +366,16 @@ def optimize_staff():
         
         return jsonify(response), 200
         
-    except Exception as e:
+    except ValueError as e:
+        logger.error(f"Validation error in optimize: {str(e)}")
         return jsonify({
-            "error": str(e)
+            "error": f"Input validation error: {str(e)}"
+        }), 400
+    except Exception as e:
+        logger.error(f"Optimization error: {str(e)}", exc_info=True)
+        return jsonify({
+            "error": f"Optimization failed: {str(e)}",
+            "type": type(e).__name__
         }), 500
 
 
@@ -639,10 +714,14 @@ def detect_frame():
     }
     """
     try:
-        if not yolo_model:
+        if yolo_model is None:
+            load_yolo_model()
+
+        if yolo_model is None:
+            details = yolo_init_error or "Unknown model initialization error"
             return jsonify({
                 "success": False,
-                "error": "YOLO model not loaded"
+                "error": f"YOLO model not loaded: {details}"
             }), 503
         
         data = request.get_json()
@@ -775,12 +854,12 @@ if __name__ == '__main__':
     print("=" * 50)
     print("🚀 Starting AI Engine API Server")
     print("=" * 50)
-    print("📍 Health Check: http://localhost:8000/health")
-    print("📍 Predict Queue: http://localhost:8000/predict")
-    print("📍 Optimize Staff: http://localhost:8000/optimize")
-    print("📍 Queue Detection: http://localhost:8000/queue/detection")
-    print("📍 AI Analysis: http://localhost:8000/ai/analyze")
-    print("📍 Detect Frame: http://localhost:8000/detect-frame")
+    print(f"📍 Health Check: http://localhost:{AI_ENGINE_PORT}/health")
+    print(f"📍 Predict Queue: http://localhost:{AI_ENGINE_PORT}/predict")
+    print(f"📍 Optimize Staff: http://localhost:{AI_ENGINE_PORT}/optimize")
+    print(f"📍 Queue Detection: http://localhost:{AI_ENGINE_PORT}/queue/detection")
+    print(f"📍 AI Analysis: http://localhost:{AI_ENGINE_PORT}/ai/analyze")
+    print(f"📍 Detect Frame: http://localhost:{AI_ENGINE_PORT}/detect-frame")
     print("=" * 50)
     
-    app.run(host='0.0.0.0', port=8000, debug=False)
+    app.run(host='0.0.0.0', port=AI_ENGINE_PORT, debug=False)

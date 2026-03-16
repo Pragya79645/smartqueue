@@ -9,7 +9,7 @@ echo.
 echo Checking services...
 
 REM Check AI Engine
-curl -s -f -o NUL http://localhost:8000/health 2>NUL
+curl -s -f -o NUL http://localhost:8001/health 2>NUL
 if %errorlevel% == 0 (
     echo [32m✓ AI Engine is running[0m
     set AI_RUNNING=1

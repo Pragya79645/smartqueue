@@ -4,7 +4,7 @@ Test script for AI Engine API endpoints
 import requests
 import json
 
-API_BASE = "http://localhost:8000"
+API_BASE = "http://localhost:8001"
 
 def test_predict():
     """Test the /predict endpoint"""

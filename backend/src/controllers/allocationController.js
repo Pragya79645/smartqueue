@@ -85,10 +85,16 @@ exports.allocateNow = async (req, res) => {
     });
 
   } catch (error) {
-    logger.error('Error in allocation:', error);
+    logger.error('Error in allocation:', {
+      message: error.message,
+      stack: error.stack,
+      details: error.response?.data || error.config || {}
+    });
     res.status(500).json({
       success: false,
-      error: 'Failed to generate allocation'
+      error: 'Failed to generate allocation',
+      details: error.message,
+      type: error.code || 'UNKNOWN_ERROR'
     });
   }
 };
@@ -326,6 +332,69 @@ exports.getStaffRequirement = async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to calculate staff requirement'
+    });
+  }
+};
+
+// GET /allocate/diagnostic - Diagnostic endpoint to help debug issues
+exports.getDiagnostic = async (req, res) => {
+  try {
+    const diagnostics = {};
+
+    // Check queue data
+    const queueCount = await QueueRecord.countDocuments();
+    const latestQueue = await QueueRecord.findOne().sort({ timestamp: -1 });
+    diagnostics.queueData = {
+      totalRecords: queueCount,
+      latestRecord: latestQueue ? {
+        counterId: latestQueue.counterId,
+        queueSize: latestQueue.queueSize,
+        timestamp: latestQueue.timestamp
+      } : null,
+      hasData: queueCount > 0
+    };
+
+    // Check staff data
+    const staffCount = await Staff.countDocuments();
+    const availableStaff = await Staff.countDocuments({ availability: 'available' });
+    const staffList = await Staff.find().select('staffId name availability shiftStart shiftEnd').limit(5);
+    diagnostics.staffData = {
+      totalStaff: staffCount,
+      availableStaff,
+      busyStaff: await Staff.countDocuments({ availability: 'busy' }),
+      sampleStaff: staffList,
+      hasData: staffCount > 0
+    };
+
+    // Check allocation data
+    const allocationCount = await Allocation.countDocuments();
+    const latestAllocation = await Allocation.findOne().sort({ timestamp: -1 });
+    diagnostics.allocationData = {
+      totalAllocations: allocationCount,
+      hasData: allocationCount > 0,
+      latestStatus: latestAllocation?.status || 'none',
+      latestCreated: latestAllocation?.timestamp || null
+    };
+
+    // Check if we can run a test optimization
+    diagnostics.capabilities = {
+      canAllocate: diagnostics.queueData.hasData && diagnostics.staffData.hasData,
+      queueDataAvailable: diagnostics.queueData.hasData,
+      staffDataAvailable: diagnostics.staffData.hasData
+    };
+
+    diagnostics.timestamp = new Date().toISOString();
+
+    res.json({
+      success: true,
+      data: diagnostics
+    });
+  } catch (error) {
+    logger.error('Error getting diagnostic info:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get diagnostic information',
+      message: error.message
     });
   }
 };

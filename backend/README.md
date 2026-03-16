@@ -181,11 +181,11 @@ POST /api/whatsapp/alert/rush
 The backend integrates with Python services for:
 
 1. **OR-Tools Optimization** (`optimizeService.js`)
-   - Endpoint: `POST http://localhost:8000/optimize`
+  - Endpoint: `POST http://localhost:8001/optimize`
    - Returns optimal staff allocation
 
 2. **LSTM Prediction** (`predictionService.js`)
-   - Endpoint: `POST http://localhost:8000/predict`
+  - Endpoint: `POST http://localhost:8001/predict`
    - Returns queue size predictions
 
 *Note: Falls back to mock algorithms if Python service is unavailable*

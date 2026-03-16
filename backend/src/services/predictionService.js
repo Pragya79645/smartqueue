@@ -2,7 +2,7 @@ const axios = require('axios');
 const logger = require('../utils/logger');
 
 // Python AI Engine endpoint for LSTM predictions
-const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://localhost:8000';
+const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://localhost:8001';
 
 /**
  * Get queue predictions using LSTM model
