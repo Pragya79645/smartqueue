@@ -32,8 +32,9 @@ exports.getOptimizedAllocation = async (data) => {
     return transformFlaskResponse(response.data);
 
   } catch (error) {
-    if (error.code === 'ECONNREFUSED') {
-      logger.error('Python AI service not available on ' + PYTHON_API_URL);
+    const transientCodes = new Set(['ECONNREFUSED', 'ECONNRESET', 'ECONNABORTED', 'ETIMEDOUT']);
+    if (transientCodes.has(error.code)) {
+      logger.warn(`Python AI service unavailable on ${PYTHON_API_URL} (${error.code}). Using mock optimization.`);
       // Return mock optimization result for development
       return mockOptimization(data);
     }
@@ -226,6 +227,8 @@ function transformFlaskResponse(flaskResponse) {
   }
 
   // Transform recommended_staff to backend allocations format
+  const assignmentTimestamp = new Date().toISOString();
+
   const allocations = flaskResponse.recommended_staff.map(rec => ({
     staffId: rec.staff_id,
     staffName: rec.staff_name,
@@ -233,6 +236,7 @@ function transformFlaskResponse(flaskResponse) {
     counterType: rec.counter_type,
     startTime: rec.start_time,
     endTime: rec.end_time,
+    lastMovedAt: rec.last_moved_at || assignmentTimestamp,
     priority: 1,
     reason: `Optimized allocation for ${rec.counter_type}`
   }));

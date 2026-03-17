@@ -18,6 +18,22 @@ const allocationSchema = new mongoose.Schema({
       type: Number,
       required: true
     },
+    counterType: {
+      type: String,
+      default: ''
+    },
+    startTime: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null
+    },
+    endTime: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null
+    },
+    lastMovedAt: {
+      type: Date,
+      default: null
+    },
     priority: {
       type: Number,
       default: 1

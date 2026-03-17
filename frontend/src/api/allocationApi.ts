@@ -13,6 +13,45 @@ interface AllocationRequest {
   budget?: number;
 }
 
+function normalizeStatus(status?: string) {
+  if (!status) return 'pending';
+  if (status === 'infeasible') return 'infeasible';
+  if (status === 'active' || status === 'completed' || status === 'applied') {
+    return 'applied';
+  }
+  return status;
+}
+
+function normalizeAssignment(item: any) {
+  return {
+    staff_id: item?.staff_id || item?.staffId || '',
+    staff_name: item?.staff_name || item?.staffName || '',
+    counter_id: String(item?.counter_id ?? item?.counterId ?? item?.counter ?? ''),
+    start_time: item?.start_time ?? item?.startTime ?? 'N/A',
+    end_time: item?.end_time ?? item?.endTime ?? 'N/A',
+    last_moved_at: item?.last_moved_at ?? item?.lastMovedAt ?? null,
+    priority: item?.priority === 1 || item?.priority === 'high' ? 'high' : 'normal',
+  };
+}
+
+function normalizeAllocation(raw: any) {
+  if (!raw) return null;
+
+  const assignments = Array.isArray(raw.allocations)
+    ? raw.allocations.map(normalizeAssignment)
+    : Array.isArray(raw.assignments)
+      ? raw.assignments.map(normalizeAssignment)
+      : [];
+
+  return {
+    id: raw.id || raw._id || '',
+    assignments,
+    totalCost: raw.totalCost ?? raw.total_cost ?? 0,
+    timestamp: raw.timestamp || raw.createdAt || new Date().toISOString(),
+    status: normalizeStatus(raw.status),
+  };
+}
+
 /**
  * Generate optimized allocation recommendation now
  */
@@ -27,7 +66,20 @@ export async function allocateNow(request?: Partial<AllocationRequest>) {
     const details = errorData.details || errorData.error || 'Unknown error';
     throw new Error(`Failed to generate allocation: ${details}`);
   }
-  return response.json();
+  const json = await response.json();
+
+  // Backend returns { success, data, optimization }. Frontend cards expect { success, allocation }.
+  const allocation = normalizeAllocation(json?.data) || normalizeAllocation(json?.optimization);
+
+  // If optimizer reports infeasible, override allocation status so UI can show correct state.
+  if (allocation && json?.optimization?.status === 'infeasible') {
+    allocation.status = 'infeasible';
+  }
+
+  return {
+    ...json,
+    allocation,
+  };
 }
 
 /**
@@ -43,7 +95,16 @@ export async function getOptimizedAllocation(request?: Partial<AllocationRequest
 export async function getRecommendation() {
   const response = await fetch(`${BACKEND_URL}/api/allocate/recommendation`);
   if (!response.ok) throw new Error('Failed to fetch recommendation');
-  return response.json();
+  const json = await response.json();
+  const allocation = normalizeAllocation(json?.data);
+  if (allocation && Array.isArray(json?.data?.allocations) && json.data.allocations.length === 0 && (json?.data?.totalScore || 0) === 0) {
+    allocation.status = 'infeasible';
+  }
+
+  return {
+    ...json,
+    allocation,
+  };
 }
 
 /**

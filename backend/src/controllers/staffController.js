@@ -54,7 +54,7 @@ exports.getStaffById = async (req, res) => {
 // POST /staff - Create new staff member
 exports.createStaff = async (req, res) => {
   try {
-    const { staffId, name, email, phone, skills, shiftStart, shiftEnd } = req.body;
+    const { staffId, name, email, phone, skills, shiftStart, shiftEnd, performanceScore } = req.body;
 
     if (!staffId || !name || !email || !phone) {
       return res.status(400).json({
@@ -80,6 +80,7 @@ exports.createStaff = async (req, res) => {
       skills: skills || ['general'],
       shiftStart: shiftStart || '09:00',
       shiftEnd: shiftEnd || '17:00',
+      performanceScore: typeof performanceScore === 'number' ? performanceScore : 100,
       availability: 'available'
     });
 

@@ -29,6 +29,15 @@ class StaffingConstraints:
     
     # Counter type to required skills mapping
     COUNTER_SKILL_MAPPING = {
+        # Queue-management project counter taxonomy
+        'general': ['general'],
+        'loan': ['loan', 'general'],
+        'account': ['account', 'general'],
+        'cashier': ['cashier', 'general'],
+        'inquiry': ['inquiry', 'general'],
+        'premium': ['premium', 'general'],
+
+        # Healthcare sample taxonomy (kept for backwards compatibility)
         'registration': ['basic', 'registration'],
         'consultation': ['intermediate', 'medical'],
         'pharmacy': ['intermediate', 'pharmacy'],
@@ -65,6 +74,15 @@ class StaffingConstraints:
     
     # Counter capacity
     COUNTER_CAPACITY = {
+        # Queue-management project counter taxonomy
+        'general': 3,
+        'loan': 3,
+        'account': 3,
+        'cashier': 3,
+        'inquiry': 3,
+        'premium': 3,
+
+        # Healthcare sample taxonomy
         'registration': 3,   # Max staff per counter type
         'consultation': 4,
         'pharmacy': 2,
@@ -106,7 +124,12 @@ class ConstraintValidator:
         Returns:
             True if staff has required skills
         """
-        required_skills = self.config.COUNTER_SKILL_MAPPING.get(counter_type, [])
+        required_skills = self.config.COUNTER_SKILL_MAPPING.get(counter_type)
+
+        # Unknown counter types are treated as generic so optimization remains feasible.
+        if not required_skills:
+            return True
+
         return any(skill in staff_skills for skill in required_skills)
     
     def validate_shift_duration(self, start_slot: int, end_slot: int) -> bool:
@@ -189,7 +212,8 @@ class ConstraintValidator:
         Returns:
             Maximum number of staff for this counter
         """
-        return self.config.COUNTER_CAPACITY.get(counter_type, 2)
+        # Use a safer default capacity for unknown counter types.
+        return self.config.COUNTER_CAPACITY.get(counter_type, 3)
     
     def time_slot_to_time(self, slot: int) -> str:
         """

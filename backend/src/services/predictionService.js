@@ -3,6 +3,44 @@ const logger = require('../utils/logger');
 
 // Python AI Engine endpoint for LSTM predictions
 const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://localhost:8001';
+const PREDICTION_TIMEOUT_MS = parseInt(process.env.AI_PREDICTION_TIMEOUT_MS || '15000', 10);
+const PREDICTION_RETRY_COUNT = parseInt(process.env.AI_PREDICTION_RETRY_COUNT || '2', 10);
+const TRANSIENT_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'ECONNABORTED', 'ETIMEDOUT']);
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function isTransientError(error) {
+  return TRANSIENT_CODES.has(error?.code);
+}
+
+async function requestPredictionWithRetry(payload) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= PREDICTION_RETRY_COUNT + 1; attempt++) {
+    try {
+      return await axios.post(`${PYTHON_API_URL}/predict`, payload, {
+        timeout: PREDICTION_TIMEOUT_MS
+      });
+    } catch (error) {
+      lastError = error;
+      const canRetry = isTransientError(error) && attempt <= PREDICTION_RETRY_COUNT;
+
+      if (!canRetry) {
+        throw error;
+      }
+
+      const backoffMs = attempt * 750;
+      logger.warn(
+        `Prediction attempt ${attempt} failed (${error.code}). Retrying in ${backoffMs}ms.`
+      );
+      await sleep(backoffMs);
+    }
+  }
+
+  throw lastError;
+}
 
 /**
  * Get queue predictions using LSTM model
@@ -16,20 +54,18 @@ exports.predictQueueLoad = async (historicalData, minutesAhead = 15) => {
       throw new Error('Insufficient historical data for prediction');
     }
 
-    // Call Python LSTM service
-    const response = await axios.post(`${PYTHON_API_URL}/predict`, {
+    // Call Python LSTM service (with retry for transient AI-engine startup/network errors)
+    const response = await requestPredictionWithRetry({
       data: historicalData,
       minutes_ahead: minutesAhead
-    }, {
-      timeout: 5000
     });
 
     logger.info(`Prediction completed: ${minutesAhead} minutes ahead`);
     return response.data;
 
   } catch (error) {
-    if (error.code === 'ECONNREFUSED') {
-      logger.error('Python prediction service not available');
+    if (isTransientError(error)) {
+      logger.warn(`Python prediction service unavailable (${error.code}). Using mock prediction.`);
       // Return mock prediction
       return mockPrediction(historicalData, minutesAhead);
     }
@@ -61,14 +97,24 @@ function mockPrediction(historicalData, minutesAhead) {
   }
 
   const predictedSize = Math.round(avgLoad * multiplier);
+  const confidence = 0.75;
+  const currentSize = historicalData[historicalData.length - 1]?.queueSize || 0;
 
   return {
     success: true,
+    predicted_queue: predictedSize,
+    confidence,
+    minutes_ahead: minutesAhead,
+    current_queue: currentSize,
+    change: predictedSize - currentSize,
+    rush_level: predictedSize > 15 ? 'high' : predictedSize > 8 ? 'medium' : 'low',
+    recommendation: 'Fallback prediction in use. Verify AI Engine availability for LSTM output.',
+    trend: predictedSize >= currentSize ? 'increasing' : 'decreasing',
     predictions: historicalData.map((d, i) => ({
       counterId: d.counterId,
       currentSize: d.queueSize,
       predictedSize: predictedSize + (i % 3 - 1), // Add slight variation
-      confidence: 0.75,
+      confidence,
       minutesAhead
     })),
     algorithm: 'mock-moving-average',

@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -8,8 +9,9 @@ interface StaffAssignment {
   staff_id: string
   staff_name: string
   counter_id: string
-  start_time: number
-  end_time: number
+  start_time: string | number
+  end_time: string | number
+  last_moved_at?: string | null
   priority: string
 }
 
@@ -27,6 +29,33 @@ interface OptimizationCardProps {
 }
 
 export function OptimizationCard({ allocation, loading, onApply, onRefresh }: OptimizationCardProps) {
+  // Re-render every 10s so durations stay current without noisy second-by-second updates.
+  const [nowMs, setNowMs] = useState(() => Date.now())
+
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 10000)
+    return () => clearInterval(timer)
+  }, [])
+
+  const formatFromLastMovedAt = (lastMovedAt?: string | null) => {
+    if (!lastMovedAt) return "Not assigned"
+
+    const parsed = new Date(lastMovedAt)
+    if (Number.isNaN(parsed.getTime())) return "Not assigned"
+
+    const elapsedSeconds = Math.max(0, Math.floor((nowMs - parsed.getTime()) / 1000))
+    if (elapsedSeconds < 60) return "Just assigned"
+    if (elapsedSeconds < 3600) {
+      const minutes = Math.floor(elapsedSeconds / 60)
+      return `${minutes} min`
+    }
+
+    const hours = Math.floor(elapsedSeconds / 3600)
+    const minutes = Math.floor(elapsedSeconds / 60)
+    const remainingMinutes = minutes % 60
+    return `${hours} hr ${remainingMinutes} min`
+  }
+
   if (loading) {
     return (
       <Card className="border-primary/20">
@@ -71,6 +100,8 @@ export function OptimizationCard({ allocation, loading, onApply, onRefresh }: Op
 
   const isApplied = allocation.status === 'applied'
   const isPending = allocation.status === 'pending'
+  const isInfeasible = allocation.status === 'infeasible'
+  const hasAssignments = allocation.assignments.length > 0
 
   // Group assignments by counter
   const counterAssignments = allocation.assignments.reduce((acc, assignment) => {
@@ -100,9 +131,15 @@ export function OptimizationCard({ allocation, loading, onApply, onRefresh }: Op
                 Pending
               </Badge>
             )}
+            {isInfeasible && (
+              <Badge variant="outline" className="bg-destructive/10 text-destructive border-destructive/20">
+                <AlertTriangle className="h-3 w-3 mr-1" />
+                No Feasible Plan
+              </Badge>
+            )}
           </div>
           <div className="flex items-center gap-2">
-            {isPending && (
+            {isPending && hasAssignments && (
               <Button 
                 onClick={() => onApply?.(allocation.id)} 
                 size="sm"
@@ -146,7 +183,14 @@ export function OptimizationCard({ allocation, loading, onApply, onRefresh }: Op
         {/* Assignments by Counter */}
         <div className="space-y-3">
           <h4 className="text-sm font-semibold text-foreground">Recommended Assignments</h4>
-          {Object.entries(counterAssignments).map(([counterId, assignments]) => (
+          {!hasAssignments ? (
+            <Alert>
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription>
+                No feasible staff assignment was found for current constraints/availability.
+              </AlertDescription>
+            </Alert>
+          ) : Object.entries(counterAssignments).map(([counterId, assignments]) => (
             <div key={counterId} className="border border-border/50 rounded-lg p-4 bg-card">
               <div className="flex items-center justify-between mb-3">
                 <h5 className="font-semibold text-foreground">Counter {counterId}</h5>
@@ -167,7 +211,7 @@ export function OptimizationCard({ allocation, loading, onApply, onRefresh }: Op
                       <div>
                         <p className="font-medium text-foreground">{assignment.staff_name}</p>
                         <p className="text-xs text-muted-foreground">
-                          Time: {assignment.start_time} - {assignment.end_time}
+                          Time: {formatFromLastMovedAt(assignment.last_moved_at)}
                         </p>
                       </div>
                     </div>
@@ -192,7 +236,9 @@ export function OptimizationCard({ allocation, loading, onApply, onRefresh }: Op
         <Alert className="bg-primary/5 border-primary/20">
           <AlertTriangle className="h-4 w-4 text-primary" />
           <AlertDescription className="text-primary/90">
-            {isPending && "This allocation is optimized using OR-Tools. Click 'Apply Allocation' to assign staff and send WhatsApp notifications."}
+            {isPending && hasAssignments && "This allocation is optimized using OR-Tools. Click 'Apply Allocation' to assign staff and send WhatsApp notifications."}
+            {isPending && !hasAssignments && "Allocation request completed, but no assignment could be generated with current inputs."}
+            {isInfeasible && "OR-Tools returned no feasible assignment. Add available staff or relax constraints, then refresh."}
             {isApplied && "This allocation has been applied. Staff have been notified via WhatsApp."}
           </AlertDescription>
         </Alert>

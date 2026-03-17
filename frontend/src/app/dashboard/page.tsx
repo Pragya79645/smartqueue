@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { CounterCard } from "@/components/counter-card"
 import { QueueGraph } from "@/components/queue-graph"
 import { PredictionCard } from "@/components/prediction-card"
@@ -10,10 +10,20 @@ import { AiDashboard } from "@/components/ai-dashboard"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Activity, AlertTriangle, BarChart3, Settings, Users, Bell } from "lucide-react"
+import { Activity, AlertTriangle, BarChart3, Settings, Users, Bell, CheckCircle2, CircleAlert, ArrowRightLeft } from "lucide-react"
 import Link from "next/link"
 import { getCurrentQueue, getQueuePrediction } from "@/api/queueApi"
 import { getOptimizedAllocation, applyAllocation } from "@/api/allocationApi"
+import { getStaffList } from "@/api/staffApi"
+import { optimizeStaffByCounter } from "@/api/aiApi"
+
+type CounterOptimization = {
+  mode: "real-time" | "predicted"
+  status: "OK" | "OVERLOADED" | "UNDERUTILIZED"
+  required_staff: number
+  action: "Add" | "Remove" | "No Change"
+  recommendation: string
+}
 
 export default function DashboardPage() {
   const [queueData, setQueueData] = useState<any[]>([])
@@ -21,8 +31,12 @@ export default function DashboardPage() {
   const [optimization, setOptimization] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [optimizationLoading, setOptimizationLoading] = useState(false)
+  const [counterOptimization, setCounterOptimization] = useState<Record<string, CounterOptimization>>({})
+  const [currentStaffByCounter, setCurrentStaffByCounter] = useState<Record<string, number>>({})
+  const [counterOptimizationLoading, setCounterOptimizationLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
+  const lastMovedAtRef = useRef<Record<string, string>>({})
 
   // Fetch live queue data
   useEffect(() => {
@@ -104,6 +118,109 @@ export default function DashboardPage() {
     }
   }, [queueData])
 
+  // Build rule-based per-counter optimization cards
+  useEffect(() => {
+    const fetchCounterOptimization = async () => {
+      if (queueData.length === 0) {
+        setCounterOptimization({})
+        return
+      }
+
+      try {
+        setCounterOptimizationLoading(true)
+
+        const counts: Record<string, number> = {}
+        for (const counter of queueData) {
+          counts[String(counter.counterId)] = Number(counter.queueSize || 0)
+        }
+
+        const staffResponse = await getStaffList()
+        const staffList = Array.isArray(staffResponse?.data) ? staffResponse.data : []
+        const currentStaff: Record<string, number> = {}
+        const dynamicStaff: Array<{
+          id: string
+          current_counter: string | null
+          status: "active" | "available" | "break"
+        }> = []
+
+        for (const member of staffList) {
+          const memberId = String(member.staffId || member.id || member._id || "").trim()
+          const availability = String(member.availability || "available").toLowerCase()
+          const mappedStatus = availability === "break" || availability === "offline"
+            ? "break"
+            : availability === "available"
+              ? "available"
+              : "active"
+
+          if (memberId) {
+            dynamicStaff.push({
+              id: memberId,
+              current_counter: member.currentCounter !== undefined && member.currentCounter !== null
+                ? String(member.currentCounter)
+                : null,
+              status: mappedStatus,
+            })
+          }
+
+          if (member.currentCounter !== undefined && member.currentCounter !== null) {
+            const key = String(member.currentCounter)
+            currentStaff[key] = (currentStaff[key] || 0) + 1
+          }
+        }
+
+        setCurrentStaffByCounter(currentStaff)
+
+        const optimizeResponse = await optimizeStaffByCounter({
+          counts,
+          staff: dynamicStaff,
+          last_moved_at: lastMovedAtRef.current,
+        })
+
+        if (optimizeResponse?.success && optimizeResponse?.data) {
+          setCounterOptimization(optimizeResponse.data)
+          if (optimizeResponse?.last_moved_at && typeof optimizeResponse.last_moved_at === "object") {
+            lastMovedAtRef.current = optimizeResponse.last_moved_at
+          }
+        }
+      } catch (err: any) {
+        console.error("Error fetching counter optimization:", err)
+      } finally {
+        setCounterOptimizationLoading(false)
+      }
+    }
+
+    fetchCounterOptimization()
+  }, [queueData])
+
+  const getStatusStyles = (status?: string) => {
+    if (status === "OK") {
+      return {
+        card: "border-green-200 bg-green-50/40",
+        badge: "bg-green-100 text-green-800 border-green-300",
+      }
+    }
+    if (status === "OVERLOADED") {
+      return {
+        card: "border-red-200 bg-red-50/40",
+        badge: "bg-red-100 text-red-800 border-red-300",
+      }
+    }
+    return {
+      card: "border-yellow-200 bg-yellow-50/40",
+      badge: "bg-yellow-100 text-yellow-800 border-yellow-300",
+    }
+  }
+
+  const getStatusIcon = (status?: string) => {
+    if (status === "OK") {
+      return <CheckCircle2 className="h-4 w-4 text-green-700" />
+    }
+    if (status === "OVERLOADED") {
+      return <CircleAlert className="h-4 w-4 text-red-700" />
+    }
+    return <AlertTriangle className="h-4 w-4 text-yellow-700" />
+  }
+
   // Calculate stats
   const totalQueue = queueData.reduce((sum, q) => sum + (q.queueSize || 0), 0)
   const avgWaitTime = queueData.length > 0
@@ -148,6 +265,21 @@ export default function DashboardPage() {
   }
 
   const rushInfo = getRushInfo()
+  const overloadedEntries = Object.entries(counterOptimization).filter(
+    ([, info]) => info?.status === "OVERLOADED"
+  )
+  const recommendationList = Object.entries(counterOptimization)
+    .map(([counterId, info]) => {
+      if (!info?.recommendation || info.recommendation === "No movement suggested") {
+        return null
+      }
+      return `Counter ${counterId}: ${info.recommendation}`
+    })
+    .filter(Boolean) as string[]
+  const primaryRecommendation = recommendationList[0] ||
+    (overloadedEntries.length > 0
+      ? `Add staff support to Counter ${overloadedEntries[0][0]} immediately.`
+      : "No immediate staffing action required.")
 
   return (
     <div className="min-h-screen bg-background">
@@ -210,6 +342,16 @@ export default function DashboardPage() {
             <AlertTitle className="text-warning">High Rush Detected</AlertTitle>
             <AlertDescription className="text-warning/80">
               {criticalCounters} counter(s) experiencing critical load. Consider reallocating staff immediately.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {overloadedEntries.length > 0 && (
+          <Alert className="mb-6 border-red-300 bg-red-50/70">
+            <CircleAlert className="h-4 w-4 text-red-700" />
+            <AlertTitle className="text-red-800">Staffing Alert: Overloaded Counters</AlertTitle>
+            <AlertDescription className="text-red-700">
+              {overloadedEntries.length} counter(s) are overloaded. Prioritize immediate staff movement or allocation.
             </AlertDescription>
           </Alert>
         )}
@@ -301,6 +443,78 @@ export default function DashboardPage() {
                   details={`Last updated: ${new Date(counter.timestamp).toLocaleTimeString()}`}
                 />
               ))}
+            </div>
+          )}
+        </div>
+
+        {/* Staff Optimization Cards */}
+        <div className="mb-8">
+          <h2 className="text-2xl font-bold text-foreground mb-4">Staff Optimization by Counter</h2>
+          <div className="mb-4 rounded-xl border border-primary/30 bg-primary/5 p-4">
+            <div className="flex items-start gap-3">
+              <ArrowRightLeft className="h-5 w-5 text-primary mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold text-foreground">Top Recommendation</p>
+                <p className="text-sm text-muted-foreground">{primaryRecommendation}</p>
+              </div>
+            </div>
+          </div>
+          {counterOptimizationLoading ? (
+            <p className="text-muted-foreground">Calculating staff recommendations...</p>
+          ) : queueData.length === 0 ? (
+            <p className="text-muted-foreground">No counter data available</p>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+              {queueData.map((counter) => {
+                const counterId = String(counter.counterId)
+                const staffInfo = counterOptimization[counterId]
+                const currentAssigned = currentStaffByCounter[counterId] || 0
+                const styles = getStatusStyles(staffInfo?.status)
+
+                return (
+                  <div
+                    key={`staff-opt-${counterId}`}
+                    className={`rounded-xl border p-5 ${styles.card}`}
+                  >
+                    <div className="flex items-start justify-between mb-4">
+                      <div>
+                        <p className="text-sm text-muted-foreground">Counter {counterId}</p>
+                        <p className="text-2xl font-bold text-foreground">{counter.queueSize || 0} people</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {getStatusIcon(staffInfo?.status)}
+                        <Badge variant="outline" className={styles.badge}>
+                          {staffInfo?.status || "UNDERUTILIZED"}
+                        </Badge>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Staff assigned</span>
+                        <span className="font-semibold text-foreground">{currentAssigned}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Required staff</span>
+                        <span className="font-semibold text-foreground">{staffInfo?.required_staff ?? 0}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Action</span>
+                        <span className="font-semibold text-foreground">{staffInfo?.action || "No Change"}</span>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 rounded-md border border-border/60 bg-card/70 p-3">
+                      <p className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Recommended action</p>
+                      <p className="text-sm font-medium text-foreground">
+                        {staffInfo?.recommendation && staffInfo.recommendation !== "No movement suggested"
+                          ? staffInfo.recommendation
+                          : staffInfo?.action || "No Change"}
+                      </p>
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           )}
         </div>

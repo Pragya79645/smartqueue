@@ -133,6 +133,94 @@ export async function getComprehensiveAnalysisDirect(data: {
   return response.json();
 }
 
+/**
+ * Rule-based staff optimization by counter.
+ * Returns: { success, data: { [counterId]: { status, required_staff, action, recommendation, mode } } }
+ */
+export async function optimizeStaffByCounter(data: {
+  counts: Record<string, number>;
+  staff?: Array<{
+    id: string;
+    current_counter: string | null;
+    status: 'active' | 'available' | 'break';
+  }>;
+  last_moved_at?: Record<string, string>;
+  people_per_staff?: number;
+  min_staff_per_counter?: number;
+  cooldown_seconds?: number;
+  current_staff?: Record<string, number>;
+  predicted_counts?: Record<string, number>;
+}) {
+  const response = await fetch(`${AI_ENGINE_URL}/api/staff/optimize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+
+  if (!response.ok) {
+    let message = 'Failed to optimize staff by counter';
+    try {
+      const body = await response.json();
+      if (body?.error) {
+        message = body.error;
+      }
+    } catch {
+      // Keep fallback message for non-JSON error responses
+    }
+    throw new Error(message);
+  }
+
+  const json = await response.json();
+
+  // Dynamic allocator returns { allocation, status, recommendations, mode, required_staff, last_moved_at }.
+  // Normalize to existing per-counter card structure to avoid breaking UI consumers.
+  const payload = json?.data;
+  if (payload?.status && payload?.required_staff && payload?.mode) {
+    const statusMap = payload.status as Record<string, string>;
+    const requiredMap = payload.required_staff as Record<string, number>;
+    const recommendationList = Array.isArray(payload.recommendations) ? payload.recommendations : [];
+    const counterIds = Array.from(new Set([
+      ...Object.keys(data.counts || {}),
+      ...Object.keys(statusMap),
+      ...Object.keys(requiredMap),
+    ])).sort();
+
+    const byCounter: Record<string, string[]> = {};
+    for (const rec of recommendationList) {
+      if (typeof rec !== 'string') continue;
+      const matches = rec.match(/Counter\s+(\w+)/gi) || [];
+      if (matches.length === 0) continue;
+      for (const match of matches) {
+        const id = match.replace(/Counter\s+/i, '').trim();
+        byCounter[id] = byCounter[id] || [];
+        byCounter[id].push(rec);
+      }
+    }
+
+    const normalized: Record<string, any> = {};
+    for (const counterId of counterIds) {
+      const status = statusMap[counterId] || 'OK';
+      const action = status === 'OVERLOADED' ? 'Add' : status === 'UNDERUTILIZED' ? 'Remove' : 'No Change';
+      normalized[counterId] = {
+        mode: payload.mode,
+        status,
+        required_staff: Number(requiredMap[counterId] || 0),
+        action,
+        recommendation: byCounter[counterId]?.join('; ') || 'No movement suggested',
+      };
+    }
+
+    return {
+      ...json,
+      data: normalized,
+      last_moved_at: payload.last_moved_at || {},
+      raw: payload,
+    };
+  }
+
+  return json;
+}
+
 // Type definitions for AI responses
 export interface AiAnalysisResponse {
   success: boolean;
@@ -228,6 +316,8 @@ export interface FrameDetectionResponse {
   camera_id: string;
   timestamp: string;
   processing_time_ms?: number;
+    /** Base64-encoded JPEG with OpenCV counter regions and bounding boxes drawn */
+    annotated_frame?: string;
 }
 
 /**

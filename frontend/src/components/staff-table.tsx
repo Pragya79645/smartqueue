@@ -12,14 +12,41 @@ interface StaffTableProps {
 }
 
 export function StaffTable({ staffData, loading, onEdit, onDelete, onAdd }: StaffTableProps) {
+    const getSkillLevel = (staff: any) => {
+        if (staff.skillLevel) return staff.skillLevel
+        const score = Number(staff.performanceScore ?? 0)
+        if (score >= 90) return "advanced"
+        if (score >= 70) return "intermediate"
+        return "basic"
+    }
+
+    const getHourlyRate = (staff: any) => {
+        if (staff.hourlyRate) return staff.hourlyRate
+        const level = getSkillLevel(staff)
+        if (level === "advanced") return 22
+        if (level === "intermediate") return 18
+        return 14
+    }
+
     const getStatusBadge = (staff: any) => {
-        if (staff.currentCounter) {
-            return <Badge variant="outline" className="bg-chart-1/10 text-chart-1 border-chart-1/20">Busy - Counter {staff.currentCounter}</Badge>
-        } else if (staff.isAvailable) {
-            return <Badge variant="outline" className="bg-success/10 text-success border-success/20">Available</Badge>
-        } else {
-            return <Badge variant="outline" className="bg-warning/10 text-warning border-warning/20">On Break</Badge>
+        if (staff.availability === "busy") {
+            const hasCounter = staff.currentCounter !== null && staff.currentCounter !== undefined
+            return (
+                <Badge variant="outline" className="bg-chart-1/10 text-chart-1 border-chart-1/20">
+                    {hasCounter ? `Busy - Counter ${staff.currentCounter}` : "Busy"}
+                </Badge>
+            )
         }
+
+        if (staff.availability === "available") {
+            return <Badge variant="outline" className="bg-success/10 text-success border-success/20">Available</Badge>
+        }
+
+        if (staff.availability === "offline") {
+            return <Badge variant="outline" className="bg-muted text-muted-foreground border-border">Offline</Badge>
+        }
+
+        return <Badge variant="outline" className="bg-warning/10 text-warning border-warning/20">On Break</Badge>
     }
 
     return (
@@ -57,11 +84,11 @@ export function StaffTable({ staffData, loading, onEdit, onDelete, onAdd }: Staf
                     </TableHeader>
                     <TableBody>
                         {staffData.map((staff) => (
-                            <TableRow key={staff._id || staff.id}>
+                            <TableRow key={staff.staffId || staff._id || staff.id}>
                                 <TableCell className="font-medium">{staff.name}</TableCell>
                                 <TableCell>
                                     <Badge variant="outline">
-                                        {staff.skillLevel}
+                                        {getSkillLevel(staff)}
                                     </Badge>
                                 </TableCell>
                                 <TableCell>
@@ -78,7 +105,7 @@ export function StaffTable({ staffData, loading, onEdit, onDelete, onAdd }: Staf
                                         )}
                                     </div>
                                 </TableCell>
-                                <TableCell>${staff.hourlyRate}/hr</TableCell>
+                                <TableCell>${getHourlyRate(staff)}/hr</TableCell>
                                 <TableCell>{getStatusBadge(staff)}</TableCell>
                                 <TableCell className="text-right">
                                     <div className="flex justify-end gap-2">
@@ -94,7 +121,7 @@ export function StaffTable({ staffData, loading, onEdit, onDelete, onAdd }: Staf
                                         <Button 
                                             variant="ghost" 
                                             size="sm" 
-                                            onClick={() => onDelete(staff._id || staff.id)}
+                                            onClick={() => onDelete(staff.staffId || staff._id || staff.id)}
                                             className="gap-1 text-destructive hover:text-destructive"
                                         >
                                             <Trash2 className="h-3 w-3" />

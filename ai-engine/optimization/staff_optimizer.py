@@ -18,6 +18,335 @@ from .constraints import (
 )
 
 
+def optimize_staff(
+    counts: Dict[str, int],
+    current_staff: Dict[str, int],
+    predicted_counts: Optional[Dict[str, int]] = None,
+    cooldown_counters: Optional[Dict[str, int]] = None,
+) -> Dict[str, Dict[str, object]]:
+    """
+    Compare queue load vs current staffing for each counter.
+
+    Rule of thumb: 1 staff member can handle 5 people.
+    If predicted_counts is provided, recommendations use predicted load.
+    cooldown_counters can be used to prevent frequent switching for counters
+    with an active cooldown (value > 0).
+    """
+    load_counts = predicted_counts if predicted_counts is not None else counts
+    mode = "predicted" if predicted_counts is not None else "real-time"
+    cooldown_counters = cooldown_counters or {}
+
+    result: Dict[str, Dict[str, object]] = {}
+    counter_ids = sorted(set(load_counts.keys()) | set(current_staff.keys()))
+    movement_notes: Dict[str, List[str]] = {counter_id: [] for counter_id in counter_ids}
+    overloaded: List[Dict[str, object]] = []
+    underutilized: List[Dict[str, object]] = []
+
+    for counter_id in counter_ids:
+        people_count = load_counts.get(counter_id, 0)
+        assigned_staff = current_staff.get(counter_id, 0)
+        required_staff = (people_count + 4) // 5
+        score = people_count / max(1, assigned_staff)
+        is_critical = people_count >= 15
+        cooldown_active = cooldown_counters.get(counter_id, 0) > 0
+
+        if required_staff > assigned_staff:
+            status = "OVERLOADED"
+            action = "Add"
+            overloaded.append({
+                "counter_id": counter_id,
+                "needed": required_staff - assigned_staff,
+                "score": score,
+                "people_count": people_count,
+                "critical": is_critical,
+                "cooldown": cooldown_active,
+            })
+        elif required_staff < assigned_staff:
+            status = "UNDERUTILIZED"
+            action = "Remove"
+            surplus = assigned_staff - required_staff
+            movable = max(0, min(surplus, assigned_staff - 1))
+            underutilized.append({
+                "counter_id": counter_id,
+                "movable": movable,
+                "score": score,
+                "people_count": people_count,
+                "cooldown": cooldown_active,
+            })
+        else:
+            status = "OK"
+            action = "No Change"
+
+        result[counter_id] = {
+            "mode": mode,
+            "status": status,
+            "score": round(score, 2),
+            "required_staff": required_staff,
+            "action": action,
+            "recommendation": "No movement suggested",
+        }
+
+        if cooldown_active:
+            result[counter_id]["recommendation"] = "Cooldown active - hold current staffing"
+
+    # Prioritize highest-risk counters first.
+    overloaded.sort(
+        key=lambda item: (
+            item["critical"],
+            item["score"],
+            item["people_count"],
+        ),
+        reverse=True,
+    )
+    # Prefer moving from lowest-load counters first.
+    underutilized.sort(
+        key=lambda item: (item["score"], item["people_count"])
+    )
+
+    # Greedy matching: move staff from underutilized counters to overloaded counters.
+    for target in overloaded:
+        target_id = target["counter_id"]
+        needed = target["needed"]
+
+        # Avoid frequent switching for counters with active cooldown.
+        if target["cooldown"]:
+            continue
+
+        for source in underutilized:
+            if needed <= 0:
+                break
+
+            source_id = source["counter_id"]
+            movable = source["movable"]
+
+            if source["cooldown"]:
+                continue
+
+            while needed > 0 and movable > 0:
+                recommendation = f"Move 1 staff from Counter {source_id} to Counter {target_id}"
+                movement_notes[source_id].append(recommendation)
+                movement_notes[target_id].append(recommendation)
+                needed -= 1
+                movable -= 1
+
+            source["movable"] = movable
+
+    for counter_id in counter_ids:
+        if movement_notes[counter_id]:
+            result[counter_id]["recommendation"] = "; ".join(movement_notes[counter_id])
+
+    return result
+
+
+def dynamic_staff_allocation(
+    counts: Dict[str, int],
+    staff: List[Dict[str, object]],
+    predicted_counts: Optional[Dict[str, int]] = None,
+    people_per_staff: int = 5,
+    min_staff_per_counter: int = 1,
+    cooldown_seconds: int = 120,
+    last_moved_at: Optional[Dict[str, object]] = None,
+    now_ts: Optional[float] = None,
+    debug: bool = True,
+) -> Dict[str, object]:
+    """
+    Dynamic staff allocation from detailed staff list.
+
+    Input staff item shape:
+    {
+        "id": "S1",
+        "current_counter": "1",
+        "status": "active|available|break"
+    }
+    """
+    if people_per_staff <= 0:
+        raise ValueError("people_per_staff must be > 0")
+
+    if min_staff_per_counter < 0:
+        raise ValueError("min_staff_per_counter must be >= 0")
+
+    def _log(msg: str) -> None:
+        if debug:
+            print(f"[dynamic-allocation] {msg}")
+
+    def _as_epoch(value: object) -> Optional[float]:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                return None
+        return None
+
+    now_epoch = float(now_ts) if now_ts is not None else datetime.now().timestamp()
+    last_moved_at = last_moved_at or {}
+    last_moved_epoch: Dict[str, float] = {}
+    for sid, ts in last_moved_at.items():
+        parsed = _as_epoch(ts)
+        if parsed is not None:
+            last_moved_epoch[str(sid)] = parsed
+
+    load_counts = predicted_counts if predicted_counts is not None else counts
+    mode = "predicted" if predicted_counts is not None else "real-time"
+    _log(f"mode={mode}, people_per_staff={people_per_staff}, min_staff_per_counter={min_staff_per_counter}")
+
+    counter_ids = sorted({str(k) for k in counts.keys()} | {str(k) for k in load_counts.keys()})
+    if not counter_ids:
+        counter_ids = sorted(
+            {
+                str(s.get("current_counter"))
+                for s in staff
+                if s.get("current_counter") not in (None, "", "null")
+            }
+        )
+
+    required_staff: Dict[str, int] = {}
+    for counter_id in counter_ids:
+        queue_size = int(load_counts.get(counter_id, counts.get(counter_id, 0)) or 0)
+        needed = (queue_size + people_per_staff - 1) // people_per_staff
+        required_staff[counter_id] = max(min_staff_per_counter, needed)
+        _log(f"counter={counter_id} queue={queue_size} required={required_staff[counter_id]}")
+
+    allocation: Dict[str, List[str]] = {counter_id: [] for counter_id in counter_ids}
+    staff_status: Dict[str, str] = {}
+    free_pool: List[str] = []
+
+    assignable_status = {"active", "available"}
+
+    for member in staff:
+        sid = str(member.get("id", "")).strip()
+        if not sid:
+            continue
+
+        status = str(member.get("status", "available")).strip().lower()
+        current_counter = member.get("current_counter")
+        current_counter_id = str(current_counter).strip() if current_counter not in (None, "") else None
+        staff_status[sid] = status
+
+        if status not in assignable_status:
+            _log(f"staff={sid} status={status} skipped (not assignable)")
+            continue
+
+        if current_counter_id and current_counter_id in allocation:
+            allocation[current_counter_id].append(sid)
+        else:
+            free_pool.append(sid)
+
+    recommendations: List[str] = []
+
+    # Fill counters with 0 staff first using free pool so every counter keeps baseline coverage.
+    for counter_id in counter_ids:
+        while len(allocation[counter_id]) < min_staff_per_counter and free_pool:
+            sid = free_pool.pop(0)
+            allocation[counter_id].append(sid)
+            recommendations.append(f"Assign {sid} to Counter {counter_id} (baseline coverage)")
+            _log(f"baseline assign: {sid} -> {counter_id}")
+
+    def _movable_from_counter(counter_id: str) -> List[str]:
+        movable: List[str] = []
+        current = allocation[counter_id]
+        required = required_staff[counter_id]
+        surplus = max(0, len(current) - required)
+        if surplus <= 0:
+            return movable
+
+        for sid in current:
+            last_move = last_moved_epoch.get(sid)
+            if last_move is not None and (now_epoch - last_move) < cooldown_seconds:
+                continue
+            movable.append(sid)
+            if len(movable) >= surplus:
+                break
+
+        return movable
+
+    # Move staff into overloaded counters.
+    targets = sorted(
+        counter_ids,
+        key=lambda cid: (required_staff[cid] - len(allocation[cid]), int(load_counts.get(cid, counts.get(cid, 0)) or 0)),
+        reverse=True,
+    )
+
+    for target_id in targets:
+        deficit = required_staff[target_id] - len(allocation[target_id])
+        if deficit <= 0:
+            continue
+
+        _log(f"target counter={target_id} deficit={deficit}")
+
+        # Use free staff first (no counter to move from).
+        while deficit > 0 and free_pool:
+            sid = free_pool.pop(0)
+            allocation[target_id].append(sid)
+            last_moved_epoch[sid] = now_epoch
+            recommendations.append(f"Assign {sid} to Counter {target_id}")
+            _log(f"free staff assign: {sid} -> {target_id}")
+            deficit -= 1
+
+        if deficit <= 0:
+            continue
+
+        sources = sorted(
+            counter_ids,
+            key=lambda cid: (len(allocation[cid]) - required_staff[cid], -(int(load_counts.get(cid, counts.get(cid, 0)) or 0))),
+            reverse=True,
+        )
+
+        for source_id in sources:
+            if deficit <= 0:
+                break
+            if source_id == target_id:
+                continue
+
+            movable = _movable_from_counter(source_id)
+            if not movable:
+                continue
+
+            for sid in movable:
+                if deficit <= 0:
+                    break
+                allocation[source_id].remove(sid)
+                allocation[target_id].append(sid)
+                last_moved_epoch[sid] = now_epoch
+                recommendations.append(f"Move {sid} from Counter {source_id} -> Counter {target_id}")
+                _log(f"move: {sid} {source_id}->{target_id}")
+                deficit -= 1
+
+        if deficit > 0:
+            msg = f"Counter {target_id} still needs {deficit} staff (insufficient movable staff)"
+            recommendations.append(msg)
+            _log(msg)
+
+    status: Dict[str, str] = {}
+    for counter_id in counter_ids:
+        assigned = len(allocation[counter_id])
+        needed = required_staff[counter_id]
+        if assigned < needed:
+            status[counter_id] = "OVERLOADED"
+        elif assigned > needed:
+            status[counter_id] = "UNDERUTILIZED"
+        else:
+            status[counter_id] = "OK"
+        _log(f"final counter={counter_id} assigned={assigned} needed={needed} status={status[counter_id]}")
+
+    serializable_last_moved = {
+        sid: datetime.fromtimestamp(ts).isoformat()
+        for sid, ts in last_moved_epoch.items()
+    }
+
+    return {
+        "allocation": allocation,
+        "status": status,
+        "recommendations": recommendations,
+        "mode": mode,
+        "required_staff": required_staff,
+        "last_moved_at": serializable_last_moved,
+    }
+
+
 @dataclass
 class StaffMember:
     """Represents a staff member with their attributes"""
@@ -147,12 +476,13 @@ class StaffOptimizer:
                         self.model.NewBoolVar(var_name)
         
         # Shift start and end times
+        max_slot = max(input_data.time_slots)
         for staff in input_data.staff:
             variables['shift_start'][staff.id] = self.model.NewIntVar(
-                0, max(input_data.time_slots), f'start_s{staff.id}'
+                0, max_slot, f'start_s{staff.id}'
             )
             variables['shift_end'][staff.id] = self.model.NewIntVar(
-                0, max(input_data.time_slots), f'end_s{staff.id}'
+                0, max_slot + 1, f'end_s{staff.id}'
             )
             variables['working'][staff.id] = self.model.NewBoolVar(f'working_s{staff.id}')
         
@@ -202,29 +532,23 @@ class StaffOptimizer:
                 ]
                 self.model.Add(sum(staff_at_counter) <= max_capacity)
         
-        # 5. Minimum staff for queue load
-        for counter in input_data.counters:
-            # Use maximum of current and predicted load
-            current_load = input_data.current_queue_load.get(counter.counter_type, 0)
-            predicted_load = input_data.predicted_queue_load.get(counter.counter_type, 0)
-            max_load = max(current_load, predicted_load)
-            min_staff = self.validator.get_min_staff_for_load(max_load)
-            
-            for slot in input_data.time_slots:
-                staff_at_counter = [
-                    variables['assignment'][staff.id][counter.id][slot]
-                    for staff in input_data.staff
-                ]
-                self.model.Add(sum(staff_at_counter) >= min_staff)
+        # 5. NOTE: Do not hard-enforce minimum staff per counter.
+        # In constrained real-world scenarios (few available staff), hard minimums can make
+        # the model infeasible. Under-staffing is instead penalized in the objective.
         
         # 6. Shift duration constraints
+        horizon_slots = len(input_data.time_slots)
         for staff in input_data.staff:
             # If working, enforce minimum and maximum shift duration
-            min_slots = int(self.config.MIN_SHIFT_HOURS * self.config.TIME_SLOTS_PER_HOUR)
-            max_slots = int(self.config.MAX_SHIFT_HOURS * self.config.TIME_SLOTS_PER_HOUR)
+            min_slots_cfg = int(self.config.MIN_SHIFT_HOURS * self.config.TIME_SLOTS_PER_HOUR)
+            max_slots_cfg = int(self.config.MAX_SHIFT_HOURS * self.config.TIME_SLOTS_PER_HOUR)
+
+            # Adapt to the provided optimization horizon (backend currently sends 8 slots: 0..7).
+            min_slots = max(1, min(min_slots_cfg, horizon_slots))
+            max_slots = max(1, min(max_slots_cfg, horizon_slots))
             
             # shift_duration = shift_end - shift_start
-            shift_duration = self.model.NewIntVar(0, max_slots, f'duration_s{staff.id}')
+            shift_duration = self.model.NewIntVar(0, horizon_slots, f'duration_s{staff.id}')
             self.model.Add(
                 shift_duration == variables['shift_end'][staff.id] - 
                 variables['shift_start'][staff.id]
@@ -307,11 +631,10 @@ class StaffOptimizer:
                     0, len(input_data.staff),
                     f'deficit_c{counter.id}_t{slot}'
                 )
-                self.model.Add(
-                    coverage_deficit == required_staff - sum(staff_at_counter)
-                ).OnlyEnforceIf(
-                    [self.model.NewBoolVar(f'under_c{counter.id}_t{slot}')]
-                )
+
+                # coverage_deficit = max(0, required_staff - assigned_staff)
+                self.model.Add(coverage_deficit >= required_staff - sum(staff_at_counter))
+                self.model.Add(coverage_deficit >= 0)
                 
                 # Heavy penalty for under-staffing (priority * 10000)
                 penalty = counter.priority * 10000

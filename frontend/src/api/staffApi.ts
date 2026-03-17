@@ -6,15 +6,22 @@
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
 
 interface StaffMember {
+  staffId?: string;
   id?: string;
   name: string;
+  email?: string;
+  phone?: string;
   skillLevel: string;
   skills: string[];
+  performanceScore?: number;
   availableSlots?: number[];
   maxHours?: number;
   hourlyRate?: number;
+  availability?: 'available' | 'busy' | 'break' | 'offline';
   isAvailable?: boolean;
   currentCounter?: string;
+  shiftStart?: string;
+  shiftEnd?: string;
 }
 
 /**
@@ -82,11 +89,14 @@ export async function updateStaff(id: string, staffData: StaffMember) {
 /**
  * Update staff availability
  */
-export async function updateStaffAvailability(id: string, isAvailable: boolean) {
+export async function updateStaffAvailability(
+  id: string,
+  availability: 'available' | 'busy' | 'break' | 'offline'
+) {
   const response = await fetch(`${BACKEND_URL}/api/staff/${id}/availability`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ isAvailable }),
+    body: JSON.stringify({ availability }),
   });
   if (!response.ok) throw new Error('Failed to update staff availability');
   return response.json();

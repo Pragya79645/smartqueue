@@ -3,6 +3,7 @@ const logger = require('../utils/logger');
 
 // Python AI Engine URL
 const AI_ENGINE_URL = process.env.PYTHON_API_URL || 'http://localhost:8001';
+const AI_ANALYZE_TIMEOUT_MS = parseInt(process.env.AI_ANALYZE_TIMEOUT_MS || '15000', 10);
 
 /**
  * GET /ai/analyze - Get comprehensive AI analysis
@@ -45,7 +46,7 @@ exports.getAiAnalysis = async (req, res) => {
     const response = await axios.post(
       `${AI_ENGINE_URL}/ai/analyze`,
       aiRequest,
-      { timeout: 10000 }
+      { timeout: AI_ANALYZE_TIMEOUT_MS }
     );
     
     logger.info('AI analysis completed successfully');
@@ -56,20 +57,26 @@ exports.getAiAnalysis = async (req, res) => {
     });
     
   } catch (error) {
-    logger.error('AI analysis error:', error.message);
+    logger.error(`AI analysis error: ${error.message}`);
     
     // Fallback response if AI engine is unavailable
-    if (error.code === 'ECONNREFUSED') {
+    const transientCodes = new Set(['ECONNREFUSED', 'ECONNRESET', 'ECONNABORTED', 'ETIMEDOUT']);
+    if (transientCodes.has(error.code)) {
       return res.json({
         success: false,
         error: 'AI Engine unavailable',
         fallback: true,
+        timestamp: new Date().toISOString(),
         analysis: {
           prediction: {
             predicted_queue: 0,
+            current_queue: 0,
+            change: 0,
             confidence: 0,
             rush_level: 'unknown',
-            recommendation: 'AI Engine offline - cannot generate predictions'
+            recommendation: 'AI Engine offline - cannot generate predictions',
+            minutes_ahead: parseInt(minutesAhead),
+            trend: 'decreasing'
           }
         }
       });
@@ -267,6 +274,32 @@ exports.processFrame = async (req, res) => {
     });
     
   } catch (error) {
+    const transientCodes = new Set(['ECONNREFUSED', 'ECONNRESET', 'ECONNABORTED', 'ETIMEDOUT'])
+    if (transientCodes.has(error.code)) {
+      logger.warn(`AI Engine unavailable for frame processing (${error.code}). Returning fallback response.`)
+
+      const zones = req.body?.counter_zones && typeof req.body.counter_zones === 'object'
+        ? req.body.counter_zones
+        : { '1': [0, 0, 1, 1], '2': [0, 0, 1, 1], '3': [0, 0, 1, 1] }
+
+      const counters = Object.keys(zones).reduce((acc, key) => {
+        acc[key] = { count: 0, status: 'normal' }
+        return acc
+      }, {})
+
+      return res.status(200).json({
+        success: true,
+        fallback: true,
+        detections: [],
+        counters,
+        total_people: 0,
+        frame_size: [0, 0],
+        camera_id: req.body?.camera_id || 'unknown',
+        timestamp: new Date().toISOString(),
+        message: 'AI engine temporarily unavailable. Returned fallback frame result.'
+      })
+    }
+
     const statusCode = error.response?.status || 500;
     const engineError = error.response?.data?.error;
     const engineMessage = error.response?.data?.message;

@@ -15,12 +15,16 @@ import base64
 from io import BytesIO
 from PIL import Image
 
+# Prevent TensorFlow GPU initialization issues on machines without stable CUDA.
+os.environ.setdefault('CUDA_VISIBLE_DEVICES', '-1')
+
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from prediction.predict import predict_next_queue_length, model, scaler
 from optimization.staff_optimizer import (
-    StaffOptimizer, OptimizationInput, StaffMember, Counter
+    StaffOptimizer, OptimizationInput, StaffMember, Counter,
+    optimize_staff as rule_based_optimize_staff,
+    dynamic_staff_allocation
 )
 
 # Configure logging
@@ -44,10 +48,20 @@ AI_ENGINE_PORT = int(os.getenv('AI_ENGINE_PORT', os.getenv('PORT', '8001')))
 # ==========================================
 #   LOAD MODELS ONCE (Global)
 # ==========================================
-# Models are already loaded in predict.py:
-# - LSTM model
-# - Scaler
-print("✓ Models loaded successfully")
+# Keep prediction imports lazy so frame detection can run even when
+# TensorFlow/prediction dependencies are unstable on a given machine.
+_prediction_module = None
+
+
+def _get_prediction_module():
+    global _prediction_module
+    if _prediction_module is None:
+        from prediction import predict as predict_module
+        _prediction_module = predict_module
+    return _prediction_module
+
+
+print("✓ AI Engine initialized (prediction loads on demand)")
 
 # Initialize optimizer
 optimizer = StaffOptimizer()
@@ -109,6 +123,66 @@ def load_yolo_model(force=False):
 
 # Try loading on startup but allow lazy retry later.
 load_yolo_model()
+
+# Per-counter colours for OpenCV annotation (BGR format)
+COUNTER_COLORS_BGR = {
+    "1": (58,  199,  71),   # green
+    "2": (255, 128,   0),   # blue
+    "3": (0,   128, 255),   # orange
+}
+_DEFAULT_COLOR_BGR = (180, 180, 180)
+
+
+def _annotate_frame(frame, detections, counter_zones, counter_counts):
+    """
+    Draw counter regions, bounding boxes, labels and counts on frame.
+    Returns a new annotated copy (does not modify the input).
+    """
+    annotated = frame.copy()
+    height, width = annotated.shape[:2]
+    font = cv2.FONT_HERSHEY_SIMPLEX
+
+    # 1. Semi-transparent counter zone fill
+    overlay = annotated.copy()
+    for cid, zone in counter_zones.items():
+        zx1, zy1, zx2, zy2 = [int(v) for v in zone]
+        color = COUNTER_COLORS_BGR.get(str(cid), _DEFAULT_COLOR_BGR)
+        cv2.rectangle(overlay, (zx1, zy1), (zx2, zy2), color, -1)
+    cv2.addWeighted(overlay, 0.10, annotated, 0.90, 0, annotated)
+
+    # 2. Vertical divider lines + counter label with count
+    for cid in sorted(counter_zones.keys()):
+        zx1, zy1, zx2, zy2 = [int(v) for v in counter_zones[cid]]
+        color = COUNTER_COLORS_BGR.get(str(cid), _DEFAULT_COLOR_BGR)
+        if zx1 > 1:
+            cv2.line(annotated, (zx1, 0), (zx1, height), color, 2)
+        count = counter_counts.get(str(cid), {}).get("count", 0)
+        label = f"C{cid}: {count}"
+        (tw, th), _ = cv2.getTextSize(label, font, 0.8, 2)
+        tx, ty = zx1 + 10, 44
+        cv2.rectangle(annotated, (tx - 4, ty - th - 6), (tx + tw + 4, ty + 4), color, -1)
+        cv2.putText(annotated, label, (tx, ty), font, 0.8, (0, 0, 0), 2)
+
+    # 3. Bounding boxes and per-person labels
+    for det in detections:
+        x1, y1, x2, y2 = [int(v) for v in det['bbox']]
+        conf = det['confidence']
+        cid = str(det.get('counter') or '')
+        color = COUNTER_COLORS_BGR.get(cid, _DEFAULT_COLOR_BGR)
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+        txt = f"p {int(conf * 100)}% C{cid}" if cid else f"p {int(conf * 100)}%"
+        (tw, th), _ = cv2.getTextSize(txt, font, 0.45, 1)
+        label_y = max(y1 - 4, th + 6)
+        cv2.rectangle(annotated, (x1, label_y - th - 6), (x1 + tw + 6, label_y + 2), color, -1)
+        cv2.putText(annotated, txt, (x1 + 2, label_y - 2), font, 0.45, (0, 0, 0), 1)
+
+    # 4. Footer: total person count
+    total = sum(info.get("count", 0) for info in counter_counts.values())
+    footer = f"Total: {total} person(s)"
+    cv2.putText(annotated, footer, (10, height - 12), font, 0.65, (0, 0, 0), 3)
+    cv2.putText(annotated, footer, (10, height - 12), font, 0.65, (255, 255, 255), 1)
+
+    return annotated
 
 
 # ==========================================
@@ -192,8 +266,8 @@ def predict_queue():
             queue_values = queue_values[-60:]
             
             # Make prediction
-            from prediction.predict import predict_future_queue_length
-            predicted_queue = predict_future_queue_length(queue_values, minutes_ahead)
+            prediction_module = _get_prediction_module()
+            predicted_queue = prediction_module.predict_future_queue_length(queue_values, minutes_ahead)
             
             # Calculate confidence based on data variance
             # NOTE: LSTM doesn't provide native confidence scores
@@ -380,6 +454,101 @@ def optimize_staff():
 
 
 # ==========================================
+#   SIMPLE STAFF OPTIMIZATION (RULE-BASED)
+# ==========================================
+@app.route('/api/staff/optimize', methods=['POST'])
+def optimize_staff_simple():
+    """
+    Rule-based staff optimization endpoint.
+
+    Request body:
+    {
+        "counts": {"counter_1": 12, "counter_2": 4},
+        "current_staff": {"counter_1": 2, "counter_2": 3},
+        "predicted_counts": {"counter_1": 15, "counter_2": 6}  # optional
+    }
+    """
+    try:
+        data = request.get_json(silent=True)
+        if not data or not isinstance(data, dict):
+            return jsonify({
+                "success": False,
+                "error": "Invalid JSON body"
+            }), 400
+
+        counts = data.get('counts')
+        staff = data.get('staff')
+        current_staff = data.get('current_staff')
+        predicted_counts = data.get('predicted_counts')
+        cooldown_counters = data.get('cooldown_counters')
+
+        if not isinstance(counts, dict):
+            return jsonify({
+                "success": False,
+                "error": "Field 'counts' is required and must be an object"
+            }), 400
+
+        if predicted_counts is not None and not isinstance(predicted_counts, dict):
+            return jsonify({
+                "success": False,
+                "error": "Field 'predicted_counts' must be an object when provided"
+            }), 400
+
+        # New contract: detailed staff list with cooldown per staff.
+        if isinstance(staff, list):
+            last_moved_at = data.get('last_moved_at')
+            if last_moved_at is not None and not isinstance(last_moved_at, dict):
+                return jsonify({
+                    "success": False,
+                    "error": "Field 'last_moved_at' must be an object when provided"
+                }), 400
+
+            optimization = dynamic_staff_allocation(
+                counts=counts,
+                staff=staff,
+                predicted_counts=predicted_counts,
+                people_per_staff=int(data.get('people_per_staff', 5)),
+                min_staff_per_counter=int(data.get('min_staff_per_counter', 1)),
+                cooldown_seconds=int(data.get('cooldown_seconds', 120)),
+                last_moved_at=last_moved_at,
+                debug=bool(data.get('debug', True)),
+            )
+        else:
+            # Legacy contract: aggregate current staff per counter.
+            if not isinstance(current_staff, dict):
+                return jsonify({
+                    "success": False,
+                    "error": "Provide either 'staff' list or 'current_staff' object"
+                }), 400
+
+            if cooldown_counters is not None and not isinstance(cooldown_counters, dict):
+                return jsonify({
+                    "success": False,
+                    "error": "Field 'cooldown_counters' must be an object when provided"
+                }), 400
+
+            optimization = rule_based_optimize_staff(
+                counts=counts,
+                current_staff=current_staff,
+                predicted_counts=predicted_counts,
+                cooldown_counters=cooldown_counters,
+            )
+
+        return jsonify({
+            "success": True,
+            "data": optimization
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Simple optimize endpoint error: {str(e)}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "error": "Failed to optimize staff",
+            "details": str(e)
+        }), 500
+
+
+# ==========================================
 #   COMBINED ENDPOINT (Predict + Optimize)
 # ==========================================
 @app.route('/predict-and-optimize', methods=['POST'])
@@ -408,7 +577,8 @@ def predict_and_optimize():
         # Step 1: Predict queue
         predicted_queue = None
         if 'last_60_values' in data and len(data['last_60_values']) == 60:
-            predicted_queue = predict_next_queue_length(data['last_60_values'])
+            prediction_module = _get_prediction_module()
+            predicted_queue = prediction_module.predict_next_queue_length(data['last_60_values'])
         
         # Step 2: Optimize staff
         if all(field in data for field in ['staff', 'counters', 'current_queue_load', 'time_slots']):
@@ -612,8 +782,8 @@ def comprehensive_analysis():
             queue_values = queue_values[-60:]
             
             # Make prediction
-            from prediction.predict import predict_future_queue_length
-            predicted_queue = predict_future_queue_length(queue_values, minutes_ahead)
+            prediction_module = _get_prediction_module()
+            predicted_queue = prediction_module.predict_future_queue_length(queue_values, minutes_ahead)
             
             variance = np.var(queue_values)
             confidence = min(0.95, max(0.6, 1.0 - (variance / 100)))
@@ -777,7 +947,8 @@ def detect_frame():
                 conf = float(box.conf[0])
                 
                 # Only process 'person' class (class 0 in COCO dataset)
-                if cls_id == 0 and conf > 0.5:
+                # Lower threshold to 0.25 so distant/small people are detected
+                if cls_id == 0 and conf > 0.25:
                     # Get bounding box coordinates
                     x1, y1, x2, y2 = box.xyxy[0].tolist()
                     
@@ -825,7 +996,16 @@ def detect_frame():
                 info["status"] = "normal"
         
         total_people = sum(info["count"] for info in counter_counts.values())
-        
+
+        # Annotate frame with counter regions, bounding boxes and counts
+        annotated_b64 = None
+        try:
+            ann = _annotate_frame(frame, detections, counter_zones, counter_counts)
+            _, buf = cv2.imencode('.jpg', ann, [cv2.IMWRITE_JPEG_QUALITY, 75])
+            annotated_b64 = base64.b64encode(buf).decode('utf-8')
+        except Exception as ann_err:
+            logger.warning(f"Frame annotation failed: {ann_err}")
+
         response = {
             "success": True,
             "detections": detections,
@@ -834,11 +1014,13 @@ def detect_frame():
             "frame_size": [width, height],
             "camera_id": data.get('camera_id', 'unknown'),
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "processing_time_ms": 0  # Can be calculated if needed
+            "processing_time_ms": 0
         }
-        
+        if annotated_b64:
+            response["annotated_frame"] = annotated_b64
+
         return jsonify(response), 200
-        
+
     except Exception as e:
         logger.error(f"Frame detection error: {str(e)}")
         return jsonify({

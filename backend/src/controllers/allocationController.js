@@ -149,6 +149,7 @@ exports.applyAllocation = async (req, res) => {
     // Apply each allocation
     const results = [];
     const notifications = [];
+    const appliedAt = new Date();
     
     for (const alloc of allocation.allocations) {
       const staff = await Staff.findOneAndUpdate(
@@ -161,6 +162,8 @@ exports.applyAllocation = async (req, res) => {
       );
 
       if (staff) {
+        alloc.lastMovedAt = appliedAt;
+
         results.push({
           staffId: alloc.staffId,
           counterId: alloc.counterId,
