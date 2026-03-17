@@ -268,7 +268,7 @@ function transformFlaskResponse(flaskResponse, queueData = []) {
     return 2;
   };
 
-  const allocations = flaskResponse.recommended_staff.map(rec => ({
+  const rawAllocations = flaskResponse.recommended_staff.map(rec => ({
     staffId: rec.staff_id,
     staffName: rec.staff_name,
     counterId: rec.counter,
@@ -282,6 +282,34 @@ function transformFlaskResponse(flaskResponse, queueData = []) {
     reason: `Optimized allocation for ${rec.counter_type}`
   }));
 
+  const queueSizeByCounter = new Map();
+  queueData.forEach((q) => {
+    if (q?.counterId !== undefined && q?.counterId !== null) {
+      queueSizeByCounter.set(String(q.counterId), Number(q.queueSize || 0));
+    }
+  });
+
+  const requiredByCounter = new Map();
+  queueSizeByCounter.forEach((queueSize, counterId) => {
+    const needed = Math.ceil(Number(queueSize || 0) / 5);
+    requiredByCounter.set(counterId, queueSize > 0 ? Math.max(1, needed) : 0);
+  });
+
+  // STRICT RULE: one staff member can appear only once in a recommendation cycle.
+  const uniqueAllocations = dedupeAllocationsByStaff(rawAllocations, queueSizeByCounter);
+  const balancedAllocations = rebalanceAllocationsToDemand(uniqueAllocations, requiredByCounter, queueSizeByCounter);
+  const allocations = capAllocationsByRequiredStaff(balancedAllocations, requiredByCounter, queueSizeByCounter);
+
+  if (uniqueAllocations.length !== rawAllocations.length) {
+    logger.warn(`Removed ${rawAllocations.length - uniqueAllocations.length} duplicate staff assignments from optimization output`);
+  }
+  if (balancedAllocations.length !== uniqueAllocations.length) {
+    logger.warn(`Rebalanced ${uniqueAllocations.length - balancedAllocations.length} assignments during demand alignment`);
+  }
+  if (allocations.length !== balancedAllocations.length) {
+    logger.warn(`Trimmed ${balancedAllocations.length - allocations.length} excess staff assignments beyond required capacity`);
+  }
+
   return {
     success: true,
     allocations,
@@ -292,6 +320,169 @@ function transformFlaskResponse(flaskResponse, queueData = []) {
     algorithm: 'or-tools-optimization',
     timestamp: new Date().toISOString()
   };
+}
+
+/**
+ * Keep only one assignment per staff member.
+ * Preference order:
+ * 1) Higher priority (1 is highest)
+ * 2) Higher queue size counter
+ * 3) Earlier start time if available
+ */
+function dedupeAllocationsByStaff(allocations, queueSizeByCounter = new Map()) {
+  const normalized = [...allocations].sort((a, b) => {
+    const pA = Number(a.priority || 2);
+    const pB = Number(b.priority || 2);
+    if (pA !== pB) return pA - pB;
+
+    const qA = queueSizeByCounter.get(String(a.counterId)) || 0;
+    const qB = queueSizeByCounter.get(String(b.counterId)) || 0;
+    if (qA !== qB) return qB - qA;
+
+    const tA = new Date(a.startTime || 0).getTime();
+    const tB = new Date(b.startTime || 0).getTime();
+    return tA - tB;
+  });
+
+  const used = new Set();
+  const unique = [];
+
+  for (const item of normalized) {
+    const sid = String(item.staffId || '').trim();
+    if (!sid || used.has(sid)) {
+      continue;
+    }
+    used.add(sid);
+    unique.push(item);
+  }
+
+  return unique;
+}
+
+function capAllocationsByRequiredStaff(allocations, requiredByCounter = new Map(), queueSizeByCounter = new Map()) {
+  const grouped = new Map();
+  for (const item of allocations) {
+    const counterId = String(item.counterId || '');
+    if (!grouped.has(counterId)) {
+      grouped.set(counterId, []);
+    }
+    grouped.get(counterId).push(item);
+  }
+
+  const trimmed = [];
+  for (const [counterId, items] of grouped.entries()) {
+    const required = Number(requiredByCounter.get(counterId) || 0);
+    if (required <= 0) {
+      continue;
+    }
+
+    const sorted = [...items].sort((a, b) => {
+      const pA = Number(a.priority || 2);
+      const pB = Number(b.priority || 2);
+      if (pA !== pB) return pA - pB;
+
+      const qA = Number(queueSizeByCounter.get(String(a.counterId)) || 0);
+      const qB = Number(queueSizeByCounter.get(String(b.counterId)) || 0);
+      if (qA !== qB) return qB - qA;
+
+      const tA = new Date(a.startTime || 0).getTime();
+      const tB = new Date(b.startTime || 0).getTime();
+      return tA - tB;
+    });
+
+    trimmed.push(...sorted.slice(0, required));
+  }
+
+  return trimmed;
+}
+
+function rebalanceAllocationsToDemand(allocations, requiredByCounter = new Map(), queueSizeByCounter = new Map()) {
+  if (!Array.isArray(allocations) || allocations.length === 0) {
+    return [];
+  }
+
+  const activeCounters = Array.from(requiredByCounter.entries())
+    .filter(([, required]) => Number(required || 0) > 0)
+    .map(([counterId, required]) => ({
+      counterId: String(counterId),
+      required: Number(required || 0),
+      queue: Number(queueSizeByCounter.get(String(counterId)) || 0),
+    }));
+
+  if (activeCounters.length === 0) {
+    return [];
+  }
+
+  // Highest demand counters are prioritized first.
+  activeCounters.sort((a, b) => {
+    if (a.queue !== b.queue) return b.queue - a.queue;
+    return b.required - a.required;
+  });
+
+  const staffPool = [...allocations]
+    .filter((item) => String(item.staffId || '').trim())
+    .sort((a, b) => {
+      const pA = Number(a.priority || 2);
+      const pB = Number(b.priority || 2);
+      if (pA !== pB) return pA - pB;
+
+      const qA = Number(queueSizeByCounter.get(String(a.counterId)) || 0);
+      const qB = Number(queueSizeByCounter.get(String(b.counterId)) || 0);
+      if (qA !== qB) return qB - qA;
+
+      const tA = new Date(a.startTime || 0).getTime();
+      const tB = new Date(b.startTime || 0).getTime();
+      return tA - tB;
+    });
+
+  const byCounter = new Map();
+  activeCounters.forEach((counter) => byCounter.set(counter.counterId, []));
+
+  const nextStaff = () => {
+    if (staffPool.length === 0) return null;
+    return staffPool.shift() || null;
+  };
+
+  // Stage 1: baseline coverage (1 staff per active counter when possible).
+  for (const counter of activeCounters) {
+    if (staffPool.length === 0) break;
+    const item = nextStaff();
+    if (!item) break;
+    byCounter.get(counter.counterId).push({
+      ...item,
+      counterId: counter.counterId,
+      reason: `${item.reason || 'Optimized allocation'} (balanced baseline coverage)`,
+    });
+  }
+
+  // Stage 2: fill additional demand up to required staff per counter.
+  while (staffPool.length > 0) {
+    let target = null;
+    let maxDeficit = 0;
+
+    for (const counter of activeCounters) {
+      const assigned = byCounter.get(counter.counterId).length;
+      const deficit = counter.required - assigned;
+      if (deficit > maxDeficit) {
+        maxDeficit = deficit;
+        target = counter;
+      }
+    }
+
+    if (!target || maxDeficit <= 0) {
+      break;
+    }
+
+    const item = nextStaff();
+    if (!item) break;
+    byCounter.get(target.counterId).push({
+      ...item,
+      counterId: target.counterId,
+      reason: `${item.reason || 'Optimized allocation'} (balanced demand fill)`,
+    });
+  }
+
+  return activeCounters.flatMap((counter) => byCounter.get(counter.counterId));
 }
 
 /**

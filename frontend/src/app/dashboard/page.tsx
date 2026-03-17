@@ -14,12 +14,12 @@ import { Activity, AlertTriangle, BarChart3, Settings, Users, Bell, CheckCircle2
 import Link from "next/link"
 import { getCurrentQueue, getQueuePrediction } from "@/api/queueApi"
 import { getOptimizedAllocation, applyAllocation } from "@/api/allocationApi"
-import { getStaffList } from "@/api/staffApi"
+import { applyStaffAllocationState, getStaffList } from "@/api/staffApi"
 import { optimizeStaffByCounter } from "@/api/aiApi"
 
 type CounterOptimization = {
   mode: "real-time" | "predicted"
-  status: "OK" | "OVERLOADED" | "UNDERUTILIZED"
+  status: "OK" | "OVERLOADED" | "OVERSTAFFED" | "UNDERUTILIZED"
   required_staff: number
   action: "Add" | "Remove" | "No Change"
   recommendation: string
@@ -33,7 +33,9 @@ export default function DashboardPage() {
   const [optimizationLoading, setOptimizationLoading] = useState(false)
   const [counterOptimization, setCounterOptimization] = useState<Record<string, CounterOptimization>>({})
   const [currentStaffByCounter, setCurrentStaffByCounter] = useState<Record<string, number>>({})
+  const [currentStaffNamesByCounter, setCurrentStaffNamesByCounter] = useState<Record<string, string[]>>({})
   const [counterOptimizationLoading, setCounterOptimizationLoading] = useState(false)
+  const [applyingSmartAllocation, setApplyingSmartAllocation] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const lastMovedAtRef = useRef<Record<string, string>>({})
@@ -137,6 +139,7 @@ export default function DashboardPage() {
         const staffResponse = await getStaffList()
         const staffList = Array.isArray(staffResponse?.data) ? staffResponse.data : []
         const currentStaff: Record<string, number> = {}
+        const currentStaffNames: Record<string, string[]> = {}
         const dynamicStaff: Array<{
           id: string
           current_counter: string | null
@@ -165,10 +168,15 @@ export default function DashboardPage() {
           if (member.currentCounter !== undefined && member.currentCounter !== null) {
             const key = String(member.currentCounter)
             currentStaff[key] = (currentStaff[key] || 0) + 1
+            if (!currentStaffNames[key]) {
+              currentStaffNames[key] = []
+            }
+            currentStaffNames[key].push(String(member.name || memberId))
           }
         }
 
         setCurrentStaffByCounter(currentStaff)
+        setCurrentStaffNamesByCounter(currentStaffNames)
 
         const optimizeResponse = await optimizeStaffByCounter({
           counts,
@@ -191,6 +199,103 @@ export default function DashboardPage() {
 
     fetchCounterOptimization()
   }, [queueData])
+
+  const handleApplySmartOptimization = async () => {
+    if (queueData.length === 0) {
+      setError("No live counter data available to optimize")
+      return
+    }
+
+    try {
+      setApplyingSmartAllocation(true)
+      setError(null)
+
+      const counts: Record<string, number> = {}
+      for (const counter of queueData) {
+        counts[String(counter.counterId)] = Number(counter.queueSize || 0)
+      }
+
+      const staffResponse = await getStaffList()
+      const staffList = Array.isArray(staffResponse?.data) ? staffResponse.data : []
+      const dynamicStaff: Array<{
+        id: string
+        current_counter: string | null
+        status: "active" | "available" | "break"
+      }> = []
+
+      for (const member of staffList) {
+        const memberId = String(member.staffId || member.id || member._id || "").trim()
+        if (!memberId) {
+          continue
+        }
+
+        const availability = String(member.availability || "available").toLowerCase()
+        const mappedStatus = availability === "break" || availability === "offline"
+          ? "break"
+          : availability === "available"
+            ? "available"
+            : "active"
+
+        dynamicStaff.push({
+          id: memberId,
+          current_counter: member.currentCounter !== undefined && member.currentCounter !== null
+            ? String(member.currentCounter)
+            : null,
+          status: mappedStatus,
+        })
+      }
+
+      const optimizeResponse = await optimizeStaffByCounter({
+        counts,
+        staff: dynamicStaff,
+        last_moved_at: lastMovedAtRef.current,
+      })
+
+      const recommendedAllocation = optimizeResponse?.raw?.allocation as Record<string, string[]> | undefined
+      if (!recommendedAllocation || typeof recommendedAllocation !== "object") {
+        throw new Error("Optimization did not return an allocation map")
+      }
+
+      const applyResponse = await applyStaffAllocationState(recommendedAllocation)
+
+      if (optimizeResponse?.success && optimizeResponse?.data) {
+        setCounterOptimization(optimizeResponse.data)
+      }
+
+      const persistedAllocation = applyResponse?.data?.allocation as Record<string, string[]> | undefined
+      if (persistedAllocation && typeof persistedAllocation === "object") {
+        const byCounterCount: Record<string, number> = {}
+        const byCounterNames: Record<string, string[]> = {}
+        const nameById: Record<string, string> = {}
+
+        for (const member of staffList) {
+          const memberId = String(member.staffId || member.id || member._id || "").trim()
+          if (memberId) {
+            nameById[memberId] = String(member.name || memberId)
+          }
+        }
+
+        for (const [counterId, ids] of Object.entries(persistedAllocation)) {
+          byCounterCount[counterId] = Array.isArray(ids) ? ids.length : 0
+          byCounterNames[counterId] = Array.isArray(ids)
+            ? ids.map((sid) => nameById[sid] || sid)
+            : []
+        }
+
+        setCurrentStaffByCounter(byCounterCount)
+        setCurrentStaffNamesByCounter(byCounterNames)
+      }
+
+      setSuccessMessage("Smart optimization applied and persisted to staff allocation state.")
+      setTimeout(() => setSuccessMessage(null), 5000)
+      setQueueData((prev) => [...prev])
+    } catch (err: any) {
+      console.error("Error applying smart optimization:", err)
+      setError(err.message || "Failed to apply smart optimization")
+    } finally {
+      setApplyingSmartAllocation(false)
+    }
+  }
 
   const getStatusStyles = (status?: string) => {
     if (status === "OK") {
@@ -219,6 +324,59 @@ export default function DashboardPage() {
       return <CircleAlert className="h-4 w-4 text-red-700" />
     }
     return <AlertTriangle className="h-4 w-4 text-yellow-700" />
+  }
+
+  const deriveStaffStatus = (assigned: number, required: number): CounterOptimization["status"] => {
+    if (assigned < required) {
+      return "OVERLOADED"
+    }
+    if (assigned > required) {
+      return "OVERSTAFFED"
+    }
+    return "OK"
+  }
+
+  const deriveStaffAction = (status: CounterOptimization["status"]): CounterOptimization["action"] => {
+    if (status === "OVERLOADED") {
+      return "Add"
+    }
+    if (status === "OVERSTAFFED" || status === "UNDERUTILIZED") {
+      return "Remove"
+    }
+    return "No Change"
+  }
+
+  const getTopCardStatus = (counterId: string, queueStatus?: string) => {
+    const required = Number(counterOptimization[counterId]?.required_staff ?? 0)
+    const assigned = Number(currentStaffByCounter[counterId] || 0)
+
+    // Keep top card state aligned with the same live values shown in staff cards.
+    if (required > 0) {
+      const derived = deriveStaffStatus(assigned, required)
+      if (derived === "OVERLOADED") {
+        return "overloaded"
+      }
+      if (derived === "OK") {
+        return "normal"
+      }
+      return "busy"
+    }
+
+    const optimizationStatus = counterOptimization[counterId]?.status
+    if (optimizationStatus === "OVERLOADED") {
+      return "overloaded"
+    }
+    if (optimizationStatus === "OK") {
+      return "normal"
+    }
+
+    if (queueStatus === "critical") {
+      return "critical"
+    }
+    if (queueStatus === "busy") {
+      return "busy"
+    }
+    return "normal"
   }
 
   // Calculate stats
@@ -265,9 +423,16 @@ export default function DashboardPage() {
   }
 
   const rushInfo = getRushInfo()
-  const overloadedEntries = Object.entries(counterOptimization).filter(
-    ([, info]) => info?.status === "OVERLOADED"
-  )
+  const overloadedEntries = queueData
+    .map((counter) => {
+      const counterId = String(counter.counterId)
+      const required = Number(counterOptimization[counterId]?.required_staff ?? 0)
+      const assigned = Number(currentStaffByCounter[counterId] || 0)
+      if (required <= 0) return null
+      const status = deriveStaffStatus(assigned, required)
+      return status === "OVERLOADED" ? [counterId, status] : null
+    })
+    .filter(Boolean) as Array<[string, CounterOptimization["status"]]>
   const recommendationList = Object.entries(counterOptimization)
     .map(([counterId, info]) => {
       if (!info?.recommendation || info.recommendation === "No movement suggested") {
@@ -421,6 +586,7 @@ export default function DashboardPage() {
             loading={optimizationLoading}
             onApply={handleApplyAllocation}
             onRefresh={fetchOptimization}
+            counterIds={queueData.map((counter) => String(counter.counterId))}
           />
         </div>
 
@@ -438,7 +604,7 @@ export default function DashboardPage() {
                   key={counter.counterId}
                   title={`Counter ${counter.counterId}`}
                   value={counter.queueSize?.toString() || "0"}
-                  status={counter.status || "normal"}
+                  status={getTopCardStatus(String(counter.counterId), counter.status)}
                   waitTime={counter.averageWaitTime}
                   details={`Last updated: ${new Date(counter.timestamp).toLocaleTimeString()}`}
                 />
@@ -449,7 +615,16 @@ export default function DashboardPage() {
 
         {/* Staff Optimization Cards */}
         <div className="mb-8">
-          <h2 className="section-title mb-4">Staff Optimization by Counter</h2>
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <h2 className="section-title mb-0">Staff Optimization by Counter</h2>
+            <Button
+              onClick={handleApplySmartOptimization}
+              disabled={counterOptimizationLoading || applyingSmartAllocation || queueData.length === 0}
+              className="font-semibold"
+            >
+              {applyingSmartAllocation ? "Applying..." : "Apply Optimization"}
+            </Button>
+          </div>
           <div className="mb-4 rounded-2xl border border-primary/35 bg-primary/10 p-4 shadow-sm">
             <div className="flex items-start gap-3">
               <ArrowRightLeft className="h-5 w-5 text-primary mt-0.5" />
@@ -469,7 +644,12 @@ export default function DashboardPage() {
                 const counterId = String(counter.counterId)
                 const staffInfo = counterOptimization[counterId]
                 const currentAssigned = currentStaffByCounter[counterId] || 0
-                const styles = getStatusStyles(staffInfo?.status)
+                const requiredStaff = Number(staffInfo?.required_staff ?? 0)
+                const effectiveStatus = requiredStaff > 0
+                  ? deriveStaffStatus(currentAssigned, requiredStaff)
+                  : (staffInfo?.status || "OK")
+                const effectiveAction = deriveStaffAction(effectiveStatus)
+                const styles = getStatusStyles(effectiveStatus)
 
                 return (
                   <div
@@ -482,9 +662,9 @@ export default function DashboardPage() {
                         <p className="text-2xl font-bold text-foreground">{counter.queueSize || 0} people</p>
                       </div>
                       <div className="flex items-center gap-2">
-                        {getStatusIcon(staffInfo?.status)}
+                        {getStatusIcon(effectiveStatus)}
                         <Badge variant="outline" className={styles.badge}>
-                          {staffInfo?.status || "UNDERUTILIZED"}
+                          {effectiveStatus}
                         </Badge>
                       </div>
                     </div>
@@ -496,11 +676,11 @@ export default function DashboardPage() {
                       </div>
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Required staff</span>
-                        <span className="text-base font-semibold text-foreground">{staffInfo?.required_staff ?? 0}</span>
+                        <span className="text-base font-semibold text-foreground">{requiredStaff}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Action</span>
-                        <span className="text-base font-semibold text-foreground">{staffInfo?.action || "No Change"}</span>
+                        <span className="text-base font-semibold text-foreground">{effectiveAction}</span>
                       </div>
                     </div>
 
@@ -509,7 +689,16 @@ export default function DashboardPage() {
                       <p className="text-sm font-medium text-foreground">
                         {staffInfo?.recommendation && staffInfo.recommendation !== "No movement suggested"
                           ? staffInfo.recommendation
-                          : staffInfo?.action || "No Change"}
+                          : effectiveAction}
+                      </p>
+                    </div>
+
+                    <div className="mt-3 rounded-md border border-border/60 bg-card/70 p-3">
+                      <p className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Assigned staff</p>
+                      <p className="text-sm font-medium text-foreground">
+                        {currentStaffNamesByCounter[counterId] && currentStaffNamesByCounter[counterId].length > 0
+                          ? currentStaffNamesByCounter[counterId].join(", ")
+                          : "No staff currently assigned"}
                       </p>
                     </div>
                   </div>

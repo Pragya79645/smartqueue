@@ -26,9 +26,10 @@ interface OptimizationCardProps {
   loading?: boolean
   onApply?: (allocationId: string) => void
   onRefresh?: () => void
+  counterIds?: string[]
 }
 
-export function OptimizationCard({ allocation, loading, onApply, onRefresh }: OptimizationCardProps) {
+export function OptimizationCard({ allocation, loading, onApply, onRefresh, counterIds = [] }: OptimizationCardProps) {
   // Re-render every 10s so durations stay current without noisy second-by-second updates.
   const [nowMs, setNowMs] = useState(() => Date.now())
 
@@ -112,6 +113,13 @@ export function OptimizationCard({ allocation, loading, onApply, onRefresh }: Op
     return acc
   }, {} as Record<string, StaffAssignment[]>)
 
+  const allCounterIds = Array.from(
+    new Set([
+      ...counterIds.map((id) => String(id)),
+      ...Object.keys(counterAssignments),
+    ])
+  ).sort((a, b) => Number(a) - Number(b))
+
   return (
     <Card className="prominent-card motion-rise border-primary/30">
       <CardHeader>
@@ -168,7 +176,7 @@ export function OptimizationCard({ allocation, loading, onApply, onRefresh }: Op
             <TrendingUp className="h-4 w-4 text-primary" />
             <div>
               <p className="text-xs text-muted-foreground">Counters</p>
-              <p className="text-xl font-extrabold">{Object.keys(counterAssignments).length}</p>
+              <p className="text-xl font-extrabold">{allCounterIds.length}</p>
             </div>
           </div>
           <div className="flex items-center gap-2 p-3 bg-muted/60 rounded-xl border border-border/50">
@@ -190,7 +198,10 @@ export function OptimizationCard({ allocation, loading, onApply, onRefresh }: Op
                 No feasible staff assignment was found for current constraints/availability.
               </AlertDescription>
             </Alert>
-          ) : Object.entries(counterAssignments).map(([counterId, assignments]) => (
+          ) : allCounterIds.map((counterId) => {
+            const assignments = counterAssignments[counterId] || []
+
+            return (
             <div key={counterId} className="border border-border/55 rounded-xl p-4 bg-card/90">
               <div className="flex items-center justify-between mb-3">
                 <h5 className="font-semibold text-foreground">Counter {counterId}</h5>
@@ -198,6 +209,9 @@ export function OptimizationCard({ allocation, loading, onApply, onRefresh }: Op
                   {assignments.length} staff
                 </Badge>
               </div>
+              {assignments.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No staff assigned in this recommendation.</p>
+              ) : (
               <div className="space-y-2">
                 {assignments.map((assignment, idx) => (
                   <div
@@ -228,8 +242,9 @@ export function OptimizationCard({ allocation, loading, onApply, onRefresh }: Op
                   </div>
                 ))}
               </div>
+              )}
             </div>
-          ))}
+          )})}
         </div>
 
         {/* Recommendation Info */}

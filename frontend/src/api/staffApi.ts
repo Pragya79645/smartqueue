@@ -156,3 +156,27 @@ export async function getOptimizedStaff(params: {
   if (!response.ok) throw new Error('Failed to get optimized staff allocation');
   return response.json();
 }
+
+/**
+ * Apply allocation map to persist current staff-to-counter state.
+ */
+export async function applyStaffAllocationState(allocation: Record<string, string[]>) {
+  const response = await fetch(`${BACKEND_URL}/api/staff/apply-allocation`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ allocation }),
+  });
+  if (!response.ok) {
+    let message = 'Failed to apply allocation state';
+    try {
+      const body = await response.json();
+      if (body?.error) {
+        message = body.error;
+      }
+    } catch {
+      // Keep fallback error message.
+    }
+    throw new Error(message);
+  }
+  return response.json();
+}

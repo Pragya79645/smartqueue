@@ -1,6 +1,27 @@
 const Staff = require('../models/Staff');
 const logger = require('../utils/logger');
 
+// Runtime mirror of the latest applied allocation. Source of truth remains DB staff.currentCounter.
+let allocationState = {
+  allocation: {},
+  updatedAt: null,
+};
+
+const buildAllocationFromStaff = (staffList) => {
+  const next = {};
+  for (const member of staffList) {
+    if (member.currentCounter === null || member.currentCounter === undefined) {
+      continue;
+    }
+    const counterId = String(member.currentCounter);
+    if (!next[counterId]) {
+      next[counterId] = [];
+    }
+    next[counterId].push(String(member.staffId));
+  }
+  return next;
+};
+
 // GET /staff - Get all staff
 exports.getAllStaff = async (req, res) => {
   try {
@@ -306,6 +327,135 @@ exports.getAvailableCount = async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to count available staff'
+    });
+  }
+};
+
+// GET /staff/allocation-state - Current staff allocation grouped by counter
+exports.getAllocationState = async (req, res) => {
+  try {
+    const staff = await Staff.find({}, { staffId: 1, name: 1, currentCounter: 1, availability: 1, lastMovedAt: 1 }).sort({ staffId: 1 });
+    const allocation = buildAllocationFromStaff(staff);
+
+    allocationState = {
+      allocation,
+      updatedAt: new Date().toISOString(),
+    };
+
+    res.json({
+      success: true,
+      data: {
+        allocation,
+        updatedAt: allocationState.updatedAt,
+      },
+    });
+  } catch (error) {
+    logger.error('Error fetching allocation state:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch allocation state',
+    });
+  }
+};
+
+// POST /staff/apply-allocation - Persist allocation map into staff state
+exports.applyAllocationState = async (req, res) => {
+  try {
+    const rawAllocation = req.body?.allocation;
+    if (!rawAllocation || typeof rawAllocation !== 'object' || Array.isArray(rawAllocation)) {
+      return res.status(400).json({
+        success: false,
+        error: 'allocation object is required',
+      });
+    }
+
+    const normalizedAllocation = {};
+    const allAssignedStaffIds = [];
+
+    for (const [counterId, staffIds] of Object.entries(rawAllocation)) {
+      if (!Array.isArray(staffIds)) {
+        return res.status(400).json({
+          success: false,
+          error: `allocation[${counterId}] must be an array`,
+        });
+      }
+
+      const uniqueForCounter = Array.from(
+        new Set(staffIds.map((sid) => String(sid || '').trim()).filter(Boolean))
+      );
+      normalizedAllocation[String(counterId)] = uniqueForCounter;
+      allAssignedStaffIds.push(...uniqueForCounter);
+    }
+
+    const duplicateCheck = new Set();
+    for (const sid of allAssignedStaffIds) {
+      if (duplicateCheck.has(sid)) {
+        return res.status(400).json({
+          success: false,
+          error: `Duplicate staff assignment detected for ${sid}`,
+        });
+      }
+      duplicateCheck.add(sid);
+    }
+
+    const staffRecords = await Staff.find({ staffId: { $in: allAssignedStaffIds } }, { staffId: 1 });
+    const existingIds = new Set(staffRecords.map((s) => String(s.staffId)));
+    const missingIds = allAssignedStaffIds.filter((sid) => !existingIds.has(sid));
+    if (missingIds.length > 0) {
+      return res.status(404).json({
+        success: false,
+        error: `Staff not found: ${missingIds.join(', ')}`,
+      });
+    }
+
+    const now = new Date();
+
+    // Reset current assignments for operational staff first, then apply the new allocation.
+    await Staff.updateMany(
+      { availability: { $in: ['available', 'busy'] } },
+      { $set: { currentCounter: null, availability: 'available' } }
+    );
+
+    for (const [counterId, staffIds] of Object.entries(normalizedAllocation)) {
+      if (staffIds.length === 0) {
+        continue;
+      }
+
+      await Staff.updateMany(
+        { staffId: { $in: staffIds } },
+        {
+          $set: {
+            currentCounter: Number(counterId),
+            availability: 'busy',
+            lastMovedAt: now,
+          },
+        }
+      );
+    }
+
+    const latestStaff = await Staff.find({}, { staffId: 1, name: 1, currentCounter: 1, availability: 1, lastMovedAt: 1 }).sort({ staffId: 1 });
+    const allocation = buildAllocationFromStaff(latestStaff);
+
+    allocationState = {
+      allocation,
+      updatedAt: now.toISOString(),
+    };
+
+    logger.info(`Allocation state applied for ${allAssignedStaffIds.length} staff assignments`);
+
+    res.json({
+      success: true,
+      data: {
+        allocation,
+        updatedAt: allocationState.updatedAt,
+      },
+      message: 'Allocation applied successfully',
+    });
+  } catch (error) {
+    logger.error('Error applying allocation state:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to apply allocation state',
     });
   }
 };

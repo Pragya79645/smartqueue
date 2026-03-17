@@ -13,6 +13,12 @@ interface CounterCardProps {
 export function CounterCard({ title, value, status = 'normal', waitTime, details }: CounterCardProps) {
     // Status colors
     const statusColors: Record<string, { bg: string; text: string; border: string; badgeBg: string }> = {
+        ok: {
+            bg: 'bg-card',
+            text: 'text-success',
+            border: 'border-success/20',
+            badgeBg: 'bg-success/10 text-success border-success/20'
+        },
         normal: {
             bg: 'bg-card',
             text: 'text-success',
@@ -26,6 +32,12 @@ export function CounterCard({ title, value, status = 'normal', waitTime, details
             badgeBg: 'bg-warning/10 text-warning border-warning/20'
         },
         critical: {
+            bg: 'bg-card',
+            text: 'text-destructive',
+            border: 'border-destructive/20',
+            badgeBg: 'bg-destructive/10 text-destructive border-destructive/20'
+        },
+        overloaded: {
             bg: 'bg-card',
             text: 'text-destructive',
             border: 'border-destructive/20',

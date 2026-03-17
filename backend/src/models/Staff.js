@@ -32,6 +32,10 @@ const staffSchema = new mongoose.Schema({
     type: Number,
     default: null
   },
+  lastMovedAt: {
+    type: Date,
+    default: null
+  },
   performanceScore: {
     type: Number,
     default: 100,

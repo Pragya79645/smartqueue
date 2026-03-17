@@ -40,7 +40,7 @@ def optimize_staff(
     counter_ids = sorted(set(load_counts.keys()) | set(current_staff.keys()))
     movement_notes: Dict[str, List[str]] = {counter_id: [] for counter_id in counter_ids}
     overloaded: List[Dict[str, object]] = []
-    underutilized: List[Dict[str, object]] = []
+    overstaffed: List[Dict[str, object]] = []
 
     for counter_id in counter_ids:
         people_count = load_counts.get(counter_id, 0)
@@ -62,11 +62,11 @@ def optimize_staff(
                 "cooldown": cooldown_active,
             })
         elif required_staff < assigned_staff:
-            status = "UNDERUTILIZED"
+            status = "OVERSTAFFED"
             action = "Remove"
             surplus = assigned_staff - required_staff
             movable = max(0, min(surplus, assigned_staff - 1))
-            underutilized.append({
+            overstaffed.append({
                 "counter_id": counter_id,
                 "movable": movable,
                 "score": score,
@@ -99,7 +99,7 @@ def optimize_staff(
         reverse=True,
     )
     # Prefer moving from lowest-load counters first.
-    underutilized.sort(
+    overstaffed.sort(
         key=lambda item: (item["score"], item["people_count"])
     )
 
@@ -112,7 +112,7 @@ def optimize_staff(
         if target["cooldown"]:
             continue
 
-        for source in underutilized:
+        for source in overstaffed:
             if needed <= 0:
                 break
 
@@ -207,12 +207,16 @@ def dynamic_staff_allocation(
     for counter_id in counter_ids:
         queue_size = int(load_counts.get(counter_id, counts.get(counter_id, 0)) or 0)
         needed = (queue_size + people_per_staff - 1) // people_per_staff
-        required_staff[counter_id] = max(min_staff_per_counter, needed)
+        # If queue is empty, no staff is required for that counter.
+        min_required = min_staff_per_counter if queue_size > 0 else 0
+        required_staff[counter_id] = max(min_required, needed)
         _log(f"counter={counter_id} queue={queue_size} required={required_staff[counter_id]}")
 
     allocation: Dict[str, List[str]] = {counter_id: [] for counter_id in counter_ids}
     staff_status: Dict[str, str] = {}
     free_pool: List[str] = []
+    seen_staff_ids: set[str] = set()
+    assignable_staff_ids: set[str] = set()
 
     assignable_status = {"active", "available"}
 
@@ -220,6 +224,11 @@ def dynamic_staff_allocation(
         sid = str(member.get("id", "")).strip()
         if not sid:
             continue
+
+        if sid in seen_staff_ids:
+            _log(f"staff={sid} skipped (duplicate staff id in payload)")
+            continue
+        seen_staff_ids.add(sid)
 
         status = str(member.get("status", "available")).strip().lower()
         current_counter = member.get("current_counter")
@@ -230,18 +239,34 @@ def dynamic_staff_allocation(
             _log(f"staff={sid} status={status} skipped (not assignable)")
             continue
 
+        assignable_staff_ids.add(sid)
+
         if current_counter_id and current_counter_id in allocation:
             allocation[current_counter_id].append(sid)
         else:
             free_pool.append(sid)
 
+    assigned_staff_ids: set[str] = set()
+    for members in allocation.values():
+        for sid in members:
+            assigned_staff_ids.add(sid)
+
+    # Snapshot of real-time assignment before any suggested movement.
+    current_allocation = {
+        counter_id: list(members)
+        for counter_id, members in allocation.items()
+    }
+
     recommendations: List[str] = []
 
     # Fill counters with 0 staff first using free pool so every counter keeps baseline coverage.
     for counter_id in counter_ids:
-        while len(allocation[counter_id]) < min_staff_per_counter and free_pool:
+        while required_staff[counter_id] > 0 and len(allocation[counter_id]) < min_staff_per_counter and free_pool:
             sid = free_pool.pop(0)
+            if sid in assigned_staff_ids:
+                continue
             allocation[counter_id].append(sid)
+            assigned_staff_ids.add(sid)
             recommendations.append(f"Assign {sid} to Counter {counter_id} (baseline coverage)")
             _log(f"baseline assign: {sid} -> {counter_id}")
 
@@ -263,6 +288,24 @@ def dynamic_staff_allocation(
 
         return movable
 
+    def _removable_excess(counter_id: str) -> List[str]:
+        removable: List[str] = []
+        current = allocation[counter_id]
+        required = required_staff[counter_id]
+        surplus = max(0, len(current) - required)
+        if surplus <= 0:
+            return removable
+
+        for sid in reversed(current):
+            last_move = last_moved_epoch.get(sid)
+            if last_move is not None and (now_epoch - last_move) < cooldown_seconds:
+                continue
+            removable.append(sid)
+            if len(removable) >= surplus:
+                break
+
+        return removable
+
     # Move staff into overloaded counters.
     targets = sorted(
         counter_ids,
@@ -280,7 +323,10 @@ def dynamic_staff_allocation(
         # Use free staff first (no counter to move from).
         while deficit > 0 and free_pool:
             sid = free_pool.pop(0)
+            if sid in assigned_staff_ids:
+                continue
             allocation[target_id].append(sid)
+            assigned_staff_ids.add(sid)
             last_moved_epoch[sid] = now_epoch
             recommendations.append(f"Assign {sid} to Counter {target_id}")
             _log(f"free staff assign: {sid} -> {target_id}")
@@ -308,6 +354,8 @@ def dynamic_staff_allocation(
             for sid in movable:
                 if deficit <= 0:
                     break
+                if sid in assigned_staff_ids and sid not in allocation[source_id]:
+                    continue
                 allocation[source_id].remove(sid)
                 allocation[target_id].append(sid)
                 last_moved_epoch[sid] = now_epoch
@@ -320,29 +368,95 @@ def dynamic_staff_allocation(
             recommendations.append(msg)
             _log(msg)
 
-    status: Dict[str, str] = {}
+    # Trim excess staff on overstaffed counters to avoid over-allocation.
     for counter_id in counter_ids:
-        assigned = len(allocation[counter_id])
+        removable = _removable_excess(counter_id)
+        if not removable:
+            continue
+
+        for sid in removable:
+            if sid not in allocation[counter_id]:
+                continue
+            allocation[counter_id].remove(sid)
+            assigned_staff_ids.discard(sid)
+            free_pool.append(sid)
+            last_moved_epoch[sid] = now_epoch
+            recommendations.append(f"Remove {sid} from Counter {counter_id} (overstaffed)")
+            _log(f"remove: {sid} from {counter_id} (overstaffed)")
+
+    total_current_assigned = sum(len(current_allocation[counter_id]) for counter_id in counter_ids)
+    has_assignable_staff = len(assignable_staff_ids) > 0
+    # If no one has a current counter but assignable staff exists, live assignment data
+    # is likely unavailable/stale. In that case, avoid false "all overloaded" and
+    # report projected status as the effective status.
+    use_projected_as_effective = total_current_assigned == 0 and has_assignable_staff
+    if use_projected_as_effective:
+        _log("live assignment missing; using projected status as effective status")
+
+    status: Dict[str, str] = {}
+    action: Dict[str, str] = {}
+    projected_status: Dict[str, str] = {}
+    for counter_id in counter_ids:
+        current_assigned = len(current_allocation[counter_id])
+        projected_assigned = len(allocation[counter_id])
         needed = required_staff[counter_id]
-        if assigned < needed:
-            status[counter_id] = "OVERLOADED"
-        elif assigned > needed:
-            status[counter_id] = "UNDERUTILIZED"
+
+        # Projected status after applying recommendations.
+        if projected_assigned < needed:
+            projected_status[counter_id] = "OVERLOADED"
+        elif projected_assigned > needed:
+            projected_status[counter_id] = "OVERSTAFFED"
         else:
-            status[counter_id] = "OK"
-        _log(f"final counter={counter_id} assigned={assigned} needed={needed} status={status[counter_id]}")
+            projected_status[counter_id] = "OK"
+
+        # Status/action reflect CURRENT live staffing when available.
+        if current_assigned < needed:
+            live_status = "OVERLOADED"
+            live_action = "Add"
+        elif current_assigned > needed:
+            live_status = "OVERSTAFFED"
+            live_action = "Remove"
+        else:
+            live_status = "OK"
+            live_action = "No Change"
+
+        if use_projected_as_effective:
+            status[counter_id] = projected_status[counter_id]
+            action[counter_id] = (
+                "Add" if projected_status[counter_id] == "OVERLOADED"
+                else "Remove" if projected_status[counter_id] == "OVERSTAFFED"
+                else "No Change"
+            )
+        else:
+            status[counter_id] = live_status
+            action[counter_id] = live_action
+
+        _log(
+            "final "
+            f"counter={counter_id} "
+            f"current_assigned={current_assigned} "
+            f"projected_assigned={projected_assigned} "
+            f"needed={needed} "
+            f"live_status={live_status} "
+            f"effective_status={status[counter_id]}"
+        )
 
     serializable_last_moved = {
         sid: datetime.fromtimestamp(ts).isoformat()
         for sid, ts in last_moved_epoch.items()
     }
 
+    unassigned_staff = sorted(assignable_staff_ids - assigned_staff_ids)
+
     return {
         "allocation": allocation,
         "status": status,
+        "action": action,
+        "projected_status": projected_status,
         "recommendations": recommendations,
         "mode": mode,
         "required_staff": required_staff,
+        "unassigned_staff": unassigned_staff,
         "last_moved_at": serializable_last_moved,
     }
 

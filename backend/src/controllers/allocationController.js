@@ -150,10 +150,34 @@ exports.applyAllocation = async (req, res) => {
     const results = [];
     const notifications = [];
     const appliedAt = new Date();
+    const appliedStaffIds = new Set();
     
     for (const alloc of allocation.allocations) {
+      const normalizedStaffId = String(alloc.staffId || '').trim();
+      if (!normalizedStaffId) {
+        results.push({
+          staffId: alloc.staffId,
+          counterId: alloc.counterId,
+          success: false,
+          error: 'Invalid staffId in allocation'
+        });
+        continue;
+      }
+
+      if (appliedStaffIds.has(normalizedStaffId)) {
+        results.push({
+          staffId: alloc.staffId,
+          counterId: alloc.counterId,
+          success: false,
+          error: 'Duplicate staff assignment skipped in same cycle'
+        });
+        continue;
+      }
+
+      appliedStaffIds.add(normalizedStaffId);
+
       const staff = await Staff.findOneAndUpdate(
-        { staffId: alloc.staffId },
+        { staffId: normalizedStaffId },
         {
           currentCounter: alloc.counterId,
           availability: 'busy'

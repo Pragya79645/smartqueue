@@ -9,11 +9,11 @@ import { Activity, AlertTriangle, ArrowRightLeft, BarChart3, Settings, Users, Be
 import Link from "next/link"
 import { getCurrentQueue } from "@/api/queueApi"
 import { optimizeStaffByCounter } from "@/api/aiApi"
-import { createStaff, deleteStaff, getStaffList, updateStaff } from "@/api/staffApi"
+import { applyStaffAllocationState, createStaff, deleteStaff, getStaffList, updateStaff } from "@/api/staffApi"
 
 type CounterOptimization = {
   mode: "real-time" | "predicted"
-  status: "OK" | "OVERLOADED" | "UNDERUTILIZED"
+  status: "OK" | "OVERLOADED" | "OVERSTAFFED" | "UNDERUTILIZED"
   required_staff: number
   action: "Add" | "Remove" | "No Change"
   recommendation: string
@@ -46,7 +46,9 @@ export default function StaffPage() {
   const [counterOptimization, setCounterOptimization] = useState<Record<string, CounterOptimization>>({})
   const [currentStaffByCounter, setCurrentStaffByCounter] = useState<Record<string, number>>({})
   const [counterOptimizationLoading, setCounterOptimizationLoading] = useState(false)
+  const [applyingSmartAllocation, setApplyingSmartAllocation] = useState(false)
   const [pageError, setPageError] = useState<string | null>(null)
+  const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const lastMovedAtRef = useRef<Record<string, string>>({})
 
@@ -290,6 +292,77 @@ export default function StaffPage() {
       })
   }
 
+  const handleApplySmartOptimization = async () => {
+    if (queueData.length === 0) {
+      setPageError("No live counter data available to optimize")
+      return
+    }
+
+    try {
+      setApplyingSmartAllocation(true)
+      setPageError(null)
+
+      const counts: Record<string, number> = {}
+      for (const counter of queueData) {
+        counts[String(counter.counterId)] = Number(counter.queueSize || 0)
+      }
+
+      const dynamicStaff: Array<{
+        id: string
+        current_counter: string | null
+        status: "active" | "available" | "break"
+      }> = []
+
+      for (const member of staffData) {
+        const memberId = String(member.staffId || member.id || member._id || "").trim()
+        if (!memberId) {
+          continue
+        }
+
+        const availability = String(member.availability || "available").toLowerCase()
+        const mappedStatus = availability === "break" || availability === "offline"
+          ? "break"
+          : availability === "available"
+            ? "available"
+            : "active"
+
+        dynamicStaff.push({
+          id: memberId,
+          current_counter: member.currentCounter !== undefined && member.currentCounter !== null
+            ? String(member.currentCounter)
+            : null,
+          status: mappedStatus,
+        })
+      }
+
+      const optimizeResponse = await optimizeStaffByCounter({
+        counts,
+        staff: dynamicStaff,
+        last_moved_at: lastMovedAtRef.current,
+      })
+
+      const recommendedAllocation = optimizeResponse?.raw?.allocation as Record<string, string[]> | undefined
+      if (!recommendedAllocation || typeof recommendedAllocation !== "object") {
+        throw new Error("Optimization did not return an allocation map")
+      }
+
+      await applyStaffAllocationState(recommendedAllocation)
+
+      if (optimizeResponse?.success && optimizeResponse?.data) {
+        setCounterOptimization(optimizeResponse.data)
+      }
+
+      await fetchData()
+      setSuccessMessage("Smart optimization applied and persisted to staff allocation state.")
+      setTimeout(() => setSuccessMessage(null), 5000)
+    } catch (err: any) {
+      console.error("Error applying smart optimization:", err)
+      setPageError(err.message || "Failed to apply smart optimization")
+    } finally {
+      setApplyingSmartAllocation(false)
+    }
+  }
+
   const getStatusStyles = (status?: string) => {
     if (status === "OK") {
       return {
@@ -319,16 +392,45 @@ export default function StaffPage() {
     return <AlertTriangle className="h-4 w-4 text-yellow-700" />
   }
 
-  const overloadedEntries = Object.entries(counterOptimization).filter(
-    ([, info]) => info?.status === "OVERLOADED"
-  )
+  const deriveStaffStatus = (assigned: number, required: number): CounterOptimization["status"] => {
+    if (assigned < required) {
+      return "OVERLOADED"
+    }
+    if (assigned > required) {
+      return "OVERSTAFFED"
+    }
+    return "OK"
+  }
+
+  const deriveStaffAction = (status: CounterOptimization["status"]): CounterOptimization["action"] => {
+    if (status === "OVERLOADED") {
+      return "Add"
+    }
+    if (status === "OVERSTAFFED" || status === "UNDERUTILIZED") {
+      return "Remove"
+    }
+    return "No Change"
+  }
+
+  const overloadedEntries = queueData
+    .map((counter) => {
+      const counterId = String(counter.counterId)
+      const staffInfo = counterOptimization[counterId]
+      const requiredStaff = Number(staffInfo?.required_staff ?? 0)
+      const assignedStaff = Number(currentStaffByCounter[counterId] || 0)
+      const effectiveStatus = requiredStaff > 0
+        ? deriveStaffStatus(assignedStaff, requiredStaff)
+        : (staffInfo?.status || "OK")
+      return { counterId, effectiveStatus }
+    })
+    .filter((entry) => entry.effectiveStatus === "OVERLOADED")
 
   const topRecommendation =
     Object.entries(counterOptimization)
       .map(([counterId, info]) => ({ counterId, rec: info?.recommendation }))
       .find((entry) => entry.rec && entry.rec !== "No movement suggested")?.rec ||
     (overloadedEntries.length > 0
-      ? `Add staff support to Counter ${overloadedEntries[0][0]} immediately.`
+      ? `Add staff support to Counter ${overloadedEntries[0].counterId} immediately.`
       : "No immediate staffing action required.")
 
   return (
@@ -375,6 +477,14 @@ export default function StaffPage() {
       </header>
 
       <main className="container mx-auto px-6 py-8">
+        {successMessage && (
+          <Alert className="mb-6 border-success/50 bg-success/5">
+            <CheckCircle2 className="h-4 w-4 text-success" />
+            <AlertTitle className="text-success">Success</AlertTitle>
+            <AlertDescription className="text-success/80">{successMessage}</AlertDescription>
+          </Alert>
+        )}
+
         {pageError && (
           <Alert className="mb-6 border-destructive/50 bg-destructive/5">
             <AlertTriangle className="h-4 w-4 text-destructive" />
@@ -447,7 +557,16 @@ export default function StaffPage() {
           </div>
 
           <div className="mb-8">
-            <h3 className="text-xl font-bold text-foreground mb-4">Staff Optimization by Counter</h3>
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h3 className="text-xl font-bold text-foreground mb-0">Staff Optimization by Counter</h3>
+              <Button
+                onClick={handleApplySmartOptimization}
+                disabled={counterOptimizationLoading || applyingSmartAllocation || queueData.length === 0}
+                className="font-semibold"
+              >
+                {applyingSmartAllocation ? "Applying..." : "Apply Optimization"}
+              </Button>
+            </div>
             {counterOptimizationLoading ? (
               <p className="text-muted-foreground">Calculating staff recommendations...</p>
             ) : queueData.length === 0 ? (
@@ -458,7 +577,16 @@ export default function StaffPage() {
                   const counterId = String(counter.counterId)
                   const staffInfo = counterOptimization[counterId]
                   const currentAssigned = currentStaffByCounter[counterId] || 0
-                  const styles = getStatusStyles(staffInfo?.status)
+                  const requiredStaff = Number(staffInfo?.required_staff ?? 0)
+                  const assignedNames = staffData
+                    .filter((member: any) => String(member.currentCounter ?? "") === counterId)
+                    .map((member: any) => String(member.name || member.staffId || member.id || member._id || ""))
+                    .filter(Boolean)
+                  const effectiveStatus = requiredStaff > 0
+                    ? deriveStaffStatus(currentAssigned, requiredStaff)
+                    : (staffInfo?.status || "OK")
+                  const effectiveAction = deriveStaffAction(effectiveStatus)
+                  const styles = getStatusStyles(effectiveStatus)
 
                   return (
                     <div key={`staff-opt-${counterId}`} className={`rounded-xl border p-5 ${styles.card}`}>
@@ -468,9 +596,9 @@ export default function StaffPage() {
                           <p className="text-2xl font-bold text-foreground">{counter.queueSize || 0} people</p>
                         </div>
                         <div className="flex items-center gap-2">
-                          {getStatusIcon(staffInfo?.status)}
+                          {getStatusIcon(effectiveStatus)}
                           <Badge variant="outline" className={styles.badge}>
-                            {staffInfo?.status || "UNDERUTILIZED"}
+                            {effectiveStatus}
                           </Badge>
                         </div>
                       </div>
@@ -486,7 +614,7 @@ export default function StaffPage() {
                         </div>
                         <div className="flex justify-between">
                           <span className="text-muted-foreground">Action</span>
-                          <span className="font-semibold text-foreground">{staffInfo?.action || "No Change"}</span>
+                          <span className="font-semibold text-foreground">{effectiveAction}</span>
                         </div>
                       </div>
 
@@ -495,7 +623,14 @@ export default function StaffPage() {
                         <p className="text-sm font-medium text-foreground">
                           {staffInfo?.recommendation && staffInfo.recommendation !== "No movement suggested"
                             ? staffInfo.recommendation
-                            : staffInfo?.action || "No Change"}
+                            : effectiveAction}
+                        </p>
+                      </div>
+
+                      <div className="mt-3 rounded-md border border-border/60 bg-card/70 p-3">
+                        <p className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Assigned staff</p>
+                        <p className="text-sm font-medium text-foreground">
+                          {assignedNames.length > 0 ? assignedNames.join(", ") : "No staff currently assigned"}
                         </p>
                       </div>
                     </div>

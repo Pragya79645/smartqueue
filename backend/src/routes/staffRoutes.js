@@ -8,6 +8,12 @@ router.get('/', staffController.getAllStaff);
 // GET /staff/available/count - Get count of available staff
 router.get('/available/count', staffController.getAvailableCount);
 
+// GET /staff/allocation-state - Get current allocation state grouped by counter
+router.get('/allocation-state', staffController.getAllocationState);
+
+// POST /staff/apply-allocation - Apply allocation map and persist in staff state
+router.post('/apply-allocation', staffController.applyAllocationState);
+
 // GET /staff/:id - Get single staff member
 router.get('/:id', staffController.getStaffById);
 

@@ -200,7 +200,11 @@ export async function optimizeStaffByCounter(data: {
     const normalized: Record<string, any> = {};
     for (const counterId of counterIds) {
       const status = statusMap[counterId] || 'OK';
-      const action = status === 'OVERLOADED' ? 'Add' : status === 'UNDERUTILIZED' ? 'Remove' : 'No Change';
+      const action = status === 'OVERLOADED'
+        ? 'Add'
+        : (status === 'OVERSTAFFED' || status === 'UNDERUTILIZED')
+          ? 'Remove'
+          : 'No Change';
       normalized[counterId] = {
         mode: payload.mode,
         status,
