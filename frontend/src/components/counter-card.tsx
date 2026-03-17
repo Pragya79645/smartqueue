@@ -36,38 +36,38 @@ export function CounterCard({ title, value, status = 'normal', waitTime, details
     const colors = statusColors[status] || statusColors.normal
 
     return (
-        <Card className={`${colors.bg} border-2 ${colors.border} transition-all hover:shadow-lg`}>
-            <CardHeader className="pb-3">
+        <Card className={`prominent-card motion-rise ${colors.bg} border-2 ${colors.border} transition-all duration-200 hover:-translate-y-0.5`}>
+            <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">
-                    <CardTitle className="text-sm font-medium text-muted-foreground">{title}</CardTitle>
-                    <Badge variant="outline" className={colors.badgeBg}>
+                    <CardTitle className="text-sm font-semibold tracking-wide text-muted-foreground uppercase">{title}</CardTitle>
+                    <Badge variant="outline" className={`${colors.badgeBg} px-3 py-1 text-[11px] font-semibold uppercase`}>
                         {status}
                     </Badge>
                 </div>
             </CardHeader>
-            <CardContent className="space-y-3">
-                <div className="flex items-center gap-2">
-                    <Users className={`h-5 w-5 ${colors.text}`} />
-                    <div className="text-3xl font-bold text-foreground">{value}</div>
-                    <span className="text-sm text-muted-foreground">people</span>
+            <CardContent className="space-y-4">
+                <div className="flex items-end gap-2">
+                    <Users className={`h-5 w-5 ${colors.text} mb-1`} />
+                    <div className="text-4xl leading-none font-extrabold text-foreground">{value}</div>
+                    <span className="text-sm font-medium text-muted-foreground mb-1">people</span>
                 </div>
                 
                 {waitTime !== undefined && (
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <Clock className="h-4 w-4" />
+                    <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                        <Clock className="h-4 w-4 text-primary" />
                         <span>~{waitTime} min wait</span>
                     </div>
                 )}
 
                 {details && (
-                    <p className="text-xs text-muted-foreground border-t border-border/50 pt-2">
+                    <p className="text-xs text-muted-foreground border-t border-border/60 pt-2">
                         {details}
                     </p>
                 )}
 
                 <div className="flex items-center gap-1 pt-1">
                     <div className={`w-2 h-2 rounded-full ${colors.text.replace('text-', 'bg-')} animate-pulse`} />
-                    <span className="text-xs text-muted-foreground">Live</span>
+                    <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Live</span>
                 </div>
             </CardContent>
         </Card>

@@ -29,7 +29,7 @@ exports.getOptimizedAllocation = async (data) => {
     logger.info('Optimization completed successfully');
     
     // Transform Flask response back to backend format
-    return transformFlaskResponse(response.data);
+    return transformFlaskResponse(response.data, queueData);
 
   } catch (error) {
     const transientCodes = new Set(['ECONNREFUSED', 'ECONNRESET', 'ECONNABORTED', 'ETIMEDOUT']);
@@ -84,7 +84,7 @@ function transformToFlaskFormat(queueData, staffData, constraints = {}) {
         id: index + 1,
         counter_type: counterType,
         max_capacity: constraints.maxCapacityPerCounter || 2,
-        priority: queue.status === 'critical' ? 1 : 2
+        priority: derivePriorityFromQueue(queue)
       });
     });
 
@@ -209,9 +209,23 @@ function calculateHourlyRate(skill_level, performanceScore) {
 }
 
 /**
+ * Derive a human-practical priority from queue conditions.
+ * Priority 1 = high, Priority 2 = normal.
+ */
+function derivePriorityFromQueue(queue = {}) {
+  const status = String(queue.status || '').toLowerCase();
+  const queueSize = Number(queue.queueSize || 0);
+  const predictedSize = Number(queue.predictedSize || 0);
+
+  if (status === 'critical' || status === 'busy') return 1;
+  if (queueSize >= 6 || predictedSize >= 6) return 1;
+  return 2;
+}
+
+/**
  * Transform Flask response to backend format
  */
-function transformFlaskResponse(flaskResponse) {
+function transformFlaskResponse(flaskResponse, queueData = []) {
   // If infeasible or no staff recommended
   if (flaskResponse.status === 'infeasible' || !flaskResponse.recommended_staff) {
     return {
@@ -229,6 +243,31 @@ function transformFlaskResponse(flaskResponse) {
   // Transform recommended_staff to backend allocations format
   const assignmentTimestamp = new Date().toISOString();
 
+  const normalizePriority = (value) => {
+    if (value === 1 || value === '1' || value === 'high') return 1;
+    if (value === 2 || value === '2' || value === 'normal') return 2;
+    return 2;
+  };
+
+  const queueByCounterId = new Map();
+  const queueByCounterType = new Map();
+  queueData.forEach((queue) => {
+    if (queue?.counterId !== undefined && queue?.counterId !== null) {
+      queueByCounterId.set(String(queue.counterId), queue);
+      queueByCounterType.set(mapCounterType(queue.counterId), queue);
+    }
+  });
+
+  const resolveFallbackPriority = (rec) => {
+    const byId = queueByCounterId.get(String(rec?.counter ?? ''));
+    if (byId) return derivePriorityFromQueue(byId);
+
+    const byType = queueByCounterType.get(String(rec?.counter_type || ''));
+    if (byType) return derivePriorityFromQueue(byType);
+
+    return 2;
+  };
+
   const allocations = flaskResponse.recommended_staff.map(rec => ({
     staffId: rec.staff_id,
     staffName: rec.staff_name,
@@ -237,7 +276,9 @@ function transformFlaskResponse(flaskResponse) {
     startTime: rec.start_time,
     endTime: rec.end_time,
     lastMovedAt: rec.last_moved_at || assignmentTimestamp,
-    priority: 1,
+    priority: rec.priority !== undefined && rec.priority !== null
+      ? normalizePriority(rec.priority)
+      : resolveFallbackPriority(rec),
     reason: `Optimized allocation for ${rec.counter_type}`
   }));
 

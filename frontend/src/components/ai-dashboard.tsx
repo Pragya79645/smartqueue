@@ -62,13 +62,13 @@ export function AiDashboard() {
   const currentState = aiData?.analysis?.current_state
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 motion-rise">
       {/* Header with AI Health Status */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Brain className="h-8 w-8 text-primary" />
+          <Brain className="h-9 w-9 text-primary" />
           <div>
-            <h2 className="text-2xl font-bold">AI Analysis Dashboard</h2>
+            <h2 className="section-title">AI Analysis Dashboard</h2>
             <p className="text-sm text-muted-foreground">
               Real-time predictions and insights
             </p>
@@ -77,7 +77,7 @@ export function AiDashboard() {
         
         <Badge 
           variant={aiHealth ? "default" : "destructive"}
-          className="flex items-center gap-2"
+          className="flex items-center gap-2 px-3 py-1 font-semibold"
         >
           {aiHealth ? (
             <><CheckCircle2 className="h-4 w-4" /> AI Engine Online</>
@@ -98,14 +98,14 @@ export function AiDashboard() {
       <div className="grid gap-6 md:grid-cols-2">
         {/* Prediction Card */}
         {prediction && (
-          <Card className="border-primary/20">
+          <Card className="prominent-card border-primary/30">
             <CardHeader>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <TrendingUp className="h-5 w-5 text-primary" />
-                  <CardTitle>Queue Prediction</CardTitle>
+                  <CardTitle className="text-xl">Queue Prediction</CardTitle>
                 </div>
-                <Badge variant="outline" className="bg-primary/10">
+                <Badge variant="outline" className="bg-primary/10 border-primary/40 font-semibold">
                   {prediction.confidence}% confident
                 </Badge>
               </div>
@@ -116,7 +116,7 @@ export function AiDashboard() {
                   Next {prediction.minutes_ahead} minutes
                 </p>
                 <div className="flex items-baseline gap-3">
-                  <p className="text-3xl font-bold">{prediction.predicted_queue}</p>
+                  <p className="text-4xl font-extrabold">{prediction.predicted_queue}</p>
                   <span className="text-sm text-muted-foreground">customers</span>
                   <Badge
                     variant={prediction.trend === 'increasing' ? 'destructive' : 'default'}
@@ -151,9 +151,9 @@ export function AiDashboard() {
               </div>
 
               {/* Recommendation */}
-              <div className="flex gap-2 p-3 bg-muted/50 rounded-lg border">
+              <div className="flex gap-2 p-3 bg-muted/65 rounded-xl border border-border/60">
                 <AlertTriangle className="h-4 w-4 text-primary mt-0.5 shrink-0" />
-                <p className="text-sm text-muted-foreground">
+                <p className="text-sm text-foreground/85">
                   {prediction.recommendation}
                 </p>
               </div>
@@ -175,11 +175,11 @@ export function AiDashboard() {
 
         {/* Current State Card */}
         {currentState && (
-          <Card>
+          <Card className="prominent-card">
             <CardHeader>
               <div className="flex items-center gap-2">
                 <Users className="h-5 w-5 text-primary" />
-                <CardTitle>Current Queue State</CardTitle>
+                <CardTitle className="text-xl">Current Queue State</CardTitle>
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -187,11 +187,11 @@ export function AiDashboard() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <p className="text-sm text-muted-foreground">Total Queue</p>
-                  <p className="text-2xl font-bold">{currentState.total_queue}</p>
+                  <p className="text-3xl font-extrabold">{currentState.total_queue}</p>
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Active Counters</p>
-                  <p className="text-2xl font-bold">{currentState.counter_count}</p>
+                  <p className="text-3xl font-extrabold">{currentState.counter_count}</p>
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Average Queue</p>
@@ -210,7 +210,7 @@ export function AiDashboard() {
                   {currentState.counters.map((counter) => (
                     <div
                       key={counter.id}
-                      className="flex items-center justify-between p-2 rounded border"
+                      className="flex items-center justify-between p-2.5 rounded-lg border border-border/60 bg-card/90"
                     >
                       <div className="flex items-center gap-2">
                         <span className="font-medium">Counter {counter.id}</span>

@@ -282,36 +282,36 @@ export default function DashboardPage() {
       : "No immediate staffing action required.")
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background subtle-grid">
       {/* Header */}
-      <header className="sticky top-0 z-50 border-b border-border/50 bg-card/80 backdrop-blur-lg">
+      <header className="sticky top-0 z-50 border-b border-border/60 bg-card/85 backdrop-blur-lg">
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="p-2 bg-primary/10 rounded-lg">
+              <div className="p-2.5 bg-primary/15 rounded-xl border border-primary/30 shadow-sm">
                 <Activity className="h-6 w-6 text-primary" />
               </div>
               <div>
-                <h1 className="text-xl font-bold text-foreground">Queue Intelligence</h1>
-                <p className="text-sm text-muted-foreground">AI-powered queue management</p>
+                <h1 className="text-2xl font-extrabold tracking-tight text-foreground">Queue Intelligence</h1>
+                <p className="text-sm font-medium text-muted-foreground">AI-powered queue management</p>
               </div>
             </div>
 
             <nav className="flex items-center gap-3">
               <Link href="/dashboard">
-                <Button variant="ghost" size="sm" className="gap-2">
+                <Button variant="ghost" size="sm" className="gap-2 font-semibold">
                   <BarChart3 className="h-4 w-4" />
                   Dashboard
                 </Button>
               </Link>
               <Link href="/staff">
-                <Button variant="ghost" size="sm" className="gap-2">
+                <Button variant="ghost" size="sm" className="gap-2 font-semibold">
                   <Users className="h-4 w-4" />
                   Staff
                 </Button>
               </Link>
               <Link href="/settings">
-                <Button variant="ghost" size="sm" className="gap-2">
+                <Button variant="ghost" size="sm" className="gap-2 font-semibold">
                   <Settings className="h-4 w-4" />
                   Settings
                 </Button>
@@ -324,7 +324,7 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      <main className="container mx-auto px-6 py-8">
+      <main className="container mx-auto px-6 py-8 motion-rise">
         {/* Alert Banners */}
         {successMessage && (
           <Alert className="mb-6 border-success/50 bg-success/5">
@@ -368,26 +368,26 @@ export default function DashboardPage() {
 
         {/* Stats Overview */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-          <div className="p-4 bg-card border border-border/50 rounded-lg">
+          <div className="prominent-card p-4">
             <div className="flex items-center justify-between mb-2">
-              <p className="text-sm text-muted-foreground">Total Queue</p>
-              <Badge variant="outline" className="bg-primary/5 text-primary border-primary/20">
+              <p className="text-sm font-medium text-muted-foreground">Total Queue</p>
+              <Badge variant="outline" className="bg-primary/10 text-primary border-primary/30 font-semibold">
                 Live
               </Badge>
             </div>
-            <p className="text-3xl font-bold text-card-foreground">{loading ? "..." : totalQueue}</p>
+            <p className="text-4xl font-extrabold text-card-foreground">{loading ? "..." : totalQueue}</p>
           </div>
-          <div className="p-4 bg-card border border-border/50 rounded-lg">
-            <p className="text-sm text-muted-foreground mb-2">Active Counters</p>
-            <p className="text-3xl font-bold text-card-foreground">{loading ? "..." : queueData.length}</p>
+          <div className="prominent-card p-4">
+            <p className="text-sm font-medium text-muted-foreground mb-2">Active Counters</p>
+            <p className="text-4xl font-extrabold text-card-foreground">{loading ? "..." : queueData.length}</p>
           </div>
-          <div className="p-4 bg-card border border-border/50 rounded-lg">
-            <p className="text-sm text-muted-foreground mb-2">Avg Wait Time</p>
-            <p className="text-3xl font-bold text-card-foreground">{loading ? "..." : `${avgWaitTime} min`}</p>
+          <div className="prominent-card p-4">
+            <p className="text-sm font-medium text-muted-foreground mb-2">Avg Wait Time</p>
+            <p className="text-4xl font-extrabold text-card-foreground">{loading ? "..." : `${avgWaitTime} min`}</p>
           </div>
-          <div className="p-4 bg-card border border-border/50 rounded-lg">
-            <p className="text-sm text-muted-foreground mb-2">Critical Load</p>
-            <p className="text-3xl font-bold text-destructive">{loading ? "..." : criticalCounters}</p>
+          <div className="prominent-card p-4">
+            <p className="text-sm font-medium text-muted-foreground mb-2">Critical Load</p>
+            <p className="text-4xl font-extrabold text-destructive">{loading ? "..." : criticalCounters}</p>
           </div>
         </div>
 
@@ -426,7 +426,7 @@ export default function DashboardPage() {
 
         {/* Counter Cards Grid */}
         <div className="mb-8">
-          <h2 className="text-2xl font-bold text-foreground mb-4">Live Counter Status</h2>
+          <h2 className="section-title mb-4">Live Counter Status</h2>
           {loading ? (
             <p className="text-muted-foreground">Loading counter data...</p>
           ) : queueData.length === 0 ? (
@@ -449,13 +449,13 @@ export default function DashboardPage() {
 
         {/* Staff Optimization Cards */}
         <div className="mb-8">
-          <h2 className="text-2xl font-bold text-foreground mb-4">Staff Optimization by Counter</h2>
-          <div className="mb-4 rounded-xl border border-primary/30 bg-primary/5 p-4">
+          <h2 className="section-title mb-4">Staff Optimization by Counter</h2>
+          <div className="mb-4 rounded-2xl border border-primary/35 bg-primary/10 p-4 shadow-sm">
             <div className="flex items-start gap-3">
               <ArrowRightLeft className="h-5 w-5 text-primary mt-0.5" />
               <div>
-                <p className="text-sm font-semibold text-foreground">Top Recommendation</p>
-                <p className="text-sm text-muted-foreground">{primaryRecommendation}</p>
+                <p className="text-sm font-semibold uppercase tracking-wide text-foreground">Top Recommendation</p>
+                <p className="text-sm text-foreground/85">{primaryRecommendation}</p>
               </div>
             </div>
           </div>
@@ -474,7 +474,7 @@ export default function DashboardPage() {
                 return (
                   <div
                     key={`staff-opt-${counterId}`}
-                    className={`rounded-xl border p-5 ${styles.card}`}
+                    className={`prominent-card rounded-2xl border p-5 ${styles.card}`}
                   >
                     <div className="flex items-start justify-between mb-4">
                       <div>
@@ -492,15 +492,15 @@ export default function DashboardPage() {
                     <div className="space-y-2 text-sm">
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Staff assigned</span>
-                        <span className="font-semibold text-foreground">{currentAssigned}</span>
+                        <span className="text-base font-semibold text-foreground">{currentAssigned}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Required staff</span>
-                        <span className="font-semibold text-foreground">{staffInfo?.required_staff ?? 0}</span>
+                        <span className="text-base font-semibold text-foreground">{staffInfo?.required_staff ?? 0}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Action</span>
-                        <span className="font-semibold text-foreground">{staffInfo?.action || "No Change"}</span>
+                        <span className="text-base font-semibold text-foreground">{staffInfo?.action || "No Change"}</span>
                       </div>
                     </div>
 

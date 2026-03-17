@@ -31,41 +31,41 @@ export function QueueGraph() {
     }, [])
 
     return (
-        <Card className="col-span-4">
+        <Card className="prominent-card motion-rise col-span-4">
             <CardHeader>
-                <CardTitle>Queue Overview (Live History)</CardTitle>
+                <CardTitle className="text-xl">Queue Overview (Live History)</CardTitle>
             </CardHeader>
             <CardContent className="pl-2">
                 <div style={{ width: "100%", height: 300 }}>
                     <ResponsiveContainer width="100%" height="100%">
                         <LineChart data={data}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
+                            <CartesianGrid strokeDasharray="4 4" stroke="var(--border)" vertical={false} />
                             <XAxis
                                 dataKey="time"
-                                stroke="#888888"
+                                stroke="var(--muted-foreground)"
                                 fontSize={12}
                                 tickLine={false}
                                 axisLine={false}
                             />
                             <YAxis
-                                stroke="#888888"
+                                stroke="var(--muted-foreground)"
                                 fontSize={12}
                                 tickLine={false}
                                 axisLine={false}
                                 tickFormatter={(value) => `${value}`}
                             />
                             <Tooltip
-                                contentStyle={{ backgroundColor: "#1f1f1f", border: "1px solid #333", borderRadius: "8px" }}
-                                labelStyle={{ color: "#888" }}
-                                itemStyle={{ color: "#fff" }}
+                                contentStyle={{ backgroundColor: "var(--card)", border: "1px solid var(--border)", borderRadius: "12px" }}
+                                labelStyle={{ color: "var(--muted-foreground)" }}
+                                itemStyle={{ color: "var(--foreground)", fontWeight: 700 }}
                             />
                             <Line
                                 type="monotone"
                                 dataKey="queue"
-                                stroke="#adfa1d"
-                                strokeWidth={2}
+                                stroke="var(--primary)"
+                                strokeWidth={3}
                                 dot={false}
-                                activeDot={{ r: 4, fill: "#adfa1d" }}
+                                activeDot={{ r: 5, fill: "var(--primary)" }}
                                 isAnimationActive={false} // smoother live updates
                             />
                         </LineChart>

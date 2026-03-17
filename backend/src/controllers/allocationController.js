@@ -173,7 +173,8 @@ exports.applyAllocation = async (req, res) => {
         // Send WhatsApp notification if phone number available
         if (staff.phone) {
           try {
-            const message = `Hi ${staff.name}! You've been assigned to Counter ${alloc.counterId}. Please proceed there immediately. Priority: ${alloc.priority || 'Normal'}. Reason: ${alloc.reason || 'Optimized allocation'}`;
+            const priorityLabel = Number(alloc.priority) === 1 ? 'High' : 'Normal';
+            const message = `Hi ${staff.name}! You've been assigned to Counter ${alloc.counterId}. Please proceed there immediately. Priority: ${priorityLabel}. Reason: ${alloc.reason || 'Optimized allocation'}`;
             
             const result = await whatsappService.sendMessage(staff.phone, message);
             

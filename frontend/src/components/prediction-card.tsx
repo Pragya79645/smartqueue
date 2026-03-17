@@ -24,32 +24,32 @@ export function PredictionCard({
     }
 
     return (
-        <Card className="border-primary/20">
+        <Card className="prominent-card motion-rise border-primary/30">
             <CardHeader>
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                         <TrendingUp className="h-5 w-5 text-primary" />
-                        <CardTitle>AI Prediction</CardTitle>
+                        <CardTitle className="text-xl">AI Prediction</CardTitle>
                     </div>
-                    <Badge variant="outline" className="bg-primary/10 text-primary border-primary/30">
+                    <Badge variant="outline" className="bg-primary/15 text-primary border-primary/40 px-3 py-1 font-semibold">
                         {confidence}% confident
                     </Badge>
                 </div>
             </CardHeader>
             <CardContent className="space-y-4">
                 <div>
-                    <p className="text-sm text-muted-foreground mb-1">{timeframe}</p>
+                    <p className="text-sm font-medium text-muted-foreground mb-1">{timeframe}</p>
                     <div className="flex items-center gap-3">
-                        <p className="text-2xl font-bold text-card-foreground">{expectedQueue} customers</p>
-                        <Badge variant="outline" className={rushColors[rushLevel]}>
+                        <p className="text-3xl font-extrabold text-card-foreground">{expectedQueue} customers</p>
+                        <Badge variant="outline" className={`${rushColors[rushLevel]} px-3 py-1 font-semibold uppercase`}>
                             {rushLevel} rush
                         </Badge>
                     </div>
                 </div>
 
-                <div className="flex gap-2 p-3 bg-muted/50 rounded-lg border border-border/50">
+                <div className="flex gap-2 p-3 bg-muted/65 rounded-xl border border-border/60">
                     <AlertTriangle className="h-4 w-4 text-primary mt-0.5 shrink-0" />
-                    <p className="text-sm text-muted-foreground">{recommendation}</p>
+                    <p className="text-sm text-foreground/85">{recommendation}</p>
                 </div>
             </CardContent>
         </Card>

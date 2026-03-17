@@ -343,9 +343,9 @@ export function CameraFeed() {
         : null
 
     return (
-        <Card className="overflow-hidden">
+        <Card className="prominent-card motion-rise overflow-hidden">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-base font-medium">Live Camera Feed</CardTitle>
+                <CardTitle className="text-xl font-semibold">Live Camera Feed</CardTitle>
                 <div className="flex items-center gap-2">
                     <label className="flex items-center gap-2 text-xs">
                         <input
@@ -396,7 +396,7 @@ export function CameraFeed() {
                         variant="outline"
                         size="sm"
                         onClick={() => uploadInputRef.current?.click()}
-                        className="h-8 gap-1"
+                        className="h-8 gap-1 font-medium"
                     >
                         <Upload className="h-3.5 w-3.5" />
                         Upload MP4

@@ -36,7 +36,7 @@ const allocationSchema = new mongoose.Schema({
     },
     priority: {
       type: Number,
-      default: 1
+      default: 2
     },
     reason: {
       type: String,
