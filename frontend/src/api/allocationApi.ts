@@ -3,6 +3,16 @@
  * Talks to: Backend /api/allocate and Flask AI Engine
  */
 
+import {
+  applyLocalAllocationById,
+  generateLocalAllocation,
+  getLocalAllocationHistory,
+  getLocalAllocationStats,
+  getLocalLatestAllocation,
+  getLocalLiveQueue,
+  getLocalStaff,
+} from '@/lib/localDataStore';
+
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
 const AI_ENGINE_URL = process.env.NEXT_PUBLIC_AI_ENGINE_URL || 'http://localhost:8001';
 
@@ -56,30 +66,41 @@ function normalizeAllocation(raw: any) {
  * Generate optimized allocation recommendation now
  */
 export async function allocateNow(request?: Partial<AllocationRequest>) {
-  const response = await fetch(`${BACKEND_URL}/api/allocate/now`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(request || {}),
-  });
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    const details = errorData.details || errorData.error || 'Unknown error';
-    throw new Error(`Failed to generate allocation: ${details}`);
+  try {
+    const response = await fetch(`${BACKEND_URL}/api/allocate/now`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request || {}),
+    });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const details = errorData.details || errorData.error || 'Unknown error';
+      throw new Error(`Failed to generate allocation: ${details}`);
+    }
+    const json = await response.json();
+
+    // Backend returns { success, data, optimization }. Frontend cards expect { success, allocation }.
+    const allocation = normalizeAllocation(json?.data) || normalizeAllocation(json?.optimization);
+
+    // If optimizer reports infeasible, override allocation status so UI can show correct state.
+    if (allocation && json?.optimization?.status === 'infeasible') {
+      allocation.status = 'infeasible';
+    }
+
+    return {
+      ...json,
+      allocation,
+    };
+  } catch {
+    const local = generateLocalAllocation();
+    return {
+      success: true,
+      data: local,
+      allocation: normalizeAllocation(local),
+      message: 'Generated local recommendation',
+      source: 'local-fallback',
+    };
   }
-  const json = await response.json();
-
-  // Backend returns { success, data, optimization }. Frontend cards expect { success, allocation }.
-  const allocation = normalizeAllocation(json?.data) || normalizeAllocation(json?.optimization);
-
-  // If optimizer reports infeasible, override allocation status so UI can show correct state.
-  if (allocation && json?.optimization?.status === 'infeasible') {
-    allocation.status = 'infeasible';
-  }
-
-  return {
-    ...json,
-    allocation,
-  };
 }
 
 /**
@@ -93,30 +114,51 @@ export async function getOptimizedAllocation(request?: Partial<AllocationRequest
  * Get latest allocation recommendation
  */
 export async function getRecommendation() {
-  const response = await fetch(`${BACKEND_URL}/api/allocate/recommendation`);
-  if (!response.ok) throw new Error('Failed to fetch recommendation');
-  const json = await response.json();
-  const allocation = normalizeAllocation(json?.data);
-  if (allocation && Array.isArray(json?.data?.allocations) && json.data.allocations.length === 0 && (json?.data?.totalScore || 0) === 0) {
-    allocation.status = 'infeasible';
-  }
+  try {
+    const response = await fetch(`${BACKEND_URL}/api/allocate/recommendation`);
+    if (!response.ok) throw new Error('Failed to fetch recommendation');
+    const json = await response.json();
+    const allocation = normalizeAllocation(json?.data);
+    if (allocation && Array.isArray(json?.data?.allocations) && json.data.allocations.length === 0 && (json?.data?.totalScore || 0) === 0) {
+      allocation.status = 'infeasible';
+    }
 
-  return {
-    ...json,
-    allocation,
-  };
+    return {
+      ...json,
+      allocation,
+    };
+  } catch {
+    const local = getLocalLatestAllocation('pending') || generateLocalAllocation();
+    return {
+      success: true,
+      data: local,
+      allocation: normalizeAllocation(local),
+      source: 'local-fallback',
+    };
+  }
 }
 
 /**
  * Apply allocation (assign staff to counters)
  */
 export async function applyAllocation(allocationId: string) {
-  const response = await fetch(`${BACKEND_URL}/api/allocate/${allocationId}/apply`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-  });
-  if (!response.ok) throw new Error('Failed to apply allocation');
-  return response.json();
+  try {
+    const response = await fetch(`${BACKEND_URL}/api/allocate/${allocationId}/apply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!response.ok) throw new Error('Failed to apply allocation');
+    return response.json();
+  } catch {
+    const applied = applyLocalAllocationById(allocationId);
+    if (!applied) throw new Error('Allocation not found');
+    return {
+      success: true,
+      data: applied,
+      message: 'Allocation applied locally',
+      source: 'local-fallback',
+    };
+  }
 }
 
 /**
@@ -132,9 +174,19 @@ export async function getAllocationHistory(params?: {
   if (params?.endDate) searchParams.append('endDate', params.endDate);
   if (params?.limit) searchParams.append('limit', params.limit.toString());
 
-  const response = await fetch(`${BACKEND_URL}/api/allocate/history?${searchParams}`);
-  if (!response.ok) throw new Error('Failed to fetch allocation history');
-  return response.json();
+  try {
+    const response = await fetch(`${BACKEND_URL}/api/allocate/history?${searchParams}`);
+    if (!response.ok) throw new Error('Failed to fetch allocation history');
+    return response.json();
+  } catch {
+    const data = getLocalAllocationHistory(params?.limit || 20);
+    return {
+      success: true,
+      count: data.length,
+      data,
+      source: 'local-fallback',
+    };
+  }
 }
 
 /**
@@ -142,9 +194,17 @@ export async function getAllocationHistory(params?: {
  */
 export async function getAllocationStats(period?: string) {
   const searchParams = period ? new URLSearchParams({ period }) : '';
-  const response = await fetch(`${BACKEND_URL}/api/allocate/stats?${searchParams}`);
-  if (!response.ok) throw new Error('Failed to fetch allocation stats');
-  return response.json();
+  try {
+    const response = await fetch(`${BACKEND_URL}/api/allocate/stats?${searchParams}`);
+    if (!response.ok) throw new Error('Failed to fetch allocation stats');
+    return response.json();
+  } catch {
+    return {
+      success: true,
+      data: getLocalAllocationStats(),
+      source: 'local-fallback',
+    };
+  }
 }
 
 /**
@@ -156,9 +216,28 @@ export async function getStaffRequirement(queueLoad: Record<string, number>) {
     searchParams.append(key, value.toString());
   });
 
-  const response = await fetch(`${BACKEND_URL}/api/allocate/requirement?${searchParams}`);
-  if (!response.ok) throw new Error('Failed to calculate staff requirement');
-  return response.json();
+  try {
+    const response = await fetch(`${BACKEND_URL}/api/allocate/requirement?${searchParams}`);
+    if (!response.ok) throw new Error('Failed to calculate staff requirement');
+    return response.json();
+  } catch {
+    const live = getLocalLiveQueue();
+    const totalQueue = live.reduce((sum, q) => sum + Number(q.queueSize || 0), 0);
+    const requiredStaff = Math.max(0, Math.ceil(totalQueue / 6));
+    const available = getLocalStaff({ availability: 'available' }).length;
+    const busy = getLocalStaff({ availability: 'busy' }).length;
+
+    return {
+      success: true,
+      data: {
+        requiredStaff,
+        currentAvailable: available,
+        currentBusy: busy,
+        needsMoreStaff: requiredStaff > available + busy,
+      },
+      source: 'local-fallback',
+    };
+  }
 }
 
 /**

@@ -3,6 +3,12 @@
  * Provides prediction, detection, and analysis data as JSON
  */
 
+import {
+  appendLocalQueueFromCounters,
+  getLocalLiveQueue,
+  getLocalQueuePrediction,
+} from '@/lib/localDataStore';
+
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
 const AI_ENGINE_URL = process.env.NEXT_PUBLIC_AI_ENGINE_URL || 'http://localhost:8001';
 
@@ -11,11 +17,40 @@ const AI_ENGINE_URL = process.env.NEXT_PUBLIC_AI_ENGINE_URL || 'http://localhost
  * Returns: { success, analysis: { prediction, current_state }, timestamp }
  */
 export async function getAiAnalysis(minutesAhead: number = 15) {
-  const response = await fetch(
-    `${BACKEND_URL}/api/ai/analyze?minutesAhead=${minutesAhead}`
-  );
-  if (!response.ok) throw new Error('Failed to fetch AI analysis');
-  return response.json();
+  try {
+    const response = await fetch(
+      `${BACKEND_URL}/api/ai/analyze?minutesAhead=${minutesAhead}`
+    );
+    if (!response.ok) throw new Error('Failed to fetch AI analysis');
+    return response.json();
+  } catch {
+    const counters = getLocalLiveQueue();
+    const prediction = getLocalQueuePrediction(undefined, minutesAhead);
+    const totalQueue = counters.reduce((sum, item) => sum + Number(item.queueSize || 0), 0);
+
+    return {
+      success: true,
+      fallback: true,
+      source: 'local-fallback',
+      analysis: {
+        prediction,
+        current_state: {
+          total_queue: totalQueue,
+          counter_count: counters.length,
+          average_queue: counters.length > 0 ? Number((totalQueue / counters.length).toFixed(2)) : 0,
+          max_queue: counters.length > 0 ? Math.max(...counters.map((c) => Number(c.queueSize || 0))) : 0,
+          min_queue: counters.length > 0 ? Math.min(...counters.map((c) => Number(c.queueSize || 0))) : 0,
+          counters: counters.map((c) => ({
+            id: String(c.counterId),
+            queue: Number(c.queueSize || 0),
+            wait_time: Number(c.averageWaitTime || 0),
+            status: c.status,
+          })),
+        },
+      },
+      timestamp: new Date().toISOString(),
+    };
+  }
 }
 
 /**
@@ -26,13 +61,24 @@ export async function getEnhancedPrediction(
   counterId?: string,
   minutesAhead: number = 15
 ) {
-  const response = await fetch(`${BACKEND_URL}/api/ai/predict-enhanced`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ counterId, minutesAhead }),
-  });
-  if (!response.ok) throw new Error('Failed to get enhanced prediction');
-  return response.json();
+  try {
+    const response = await fetch(`${BACKEND_URL}/api/ai/predict-enhanced`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ counterId, minutesAhead }),
+    });
+    if (!response.ok) throw new Error('Failed to get enhanced prediction');
+    return response.json();
+  } catch {
+    return {
+      success: true,
+      prediction: {
+        ...getLocalQueuePrediction(counterId, minutesAhead),
+        timeframe: `Next ${minutesAhead} minutes`,
+      },
+      source: 'local-fallback',
+    };
+  }
 }
 
 /**
@@ -331,30 +377,61 @@ export interface FrameDetectionResponse {
 export async function processVideoFrame(
   frameData: string, 
   cameraId: string = 'webcam',
-  counterZones?: Record<string, [number, number, number, number]>
+  counterZones?: Record<string, [number, number, number, number]>,
+  options?: { includeAnnotated?: boolean }
 ): Promise<FrameDetectionResponse> {
-  const response = await fetch(`${BACKEND_URL}/api/ai/process-frame`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      frame: frameData,
-      camera_id: cameraId,
-      counter_zones: counterZones,
-    }),
-  });
-  if (!response.ok) {
-    let errorMessage = 'Failed to process video frame';
-    try {
-      const errorBody = await response.json();
-      if (errorBody?.message) {
-        errorMessage = `Failed to process video frame: ${errorBody.message}`;
-      } else if (errorBody?.error) {
-        errorMessage = `Failed to process video frame: ${errorBody.error}`;
+  try {
+    const response = await fetch(`${BACKEND_URL}/api/ai/process-frame`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        frame: frameData,
+        camera_id: cameraId,
+        counter_zones: counterZones,
+        include_annotated: options?.includeAnnotated === true,
+      }),
+    });
+
+    if (!response.ok) {
+      let errorMessage = 'Failed to process video frame';
+      try {
+        const errorBody = await response.json();
+        if (errorBody?.message) {
+          errorMessage = `Failed to process video frame: ${errorBody.message}`;
+        } else if (errorBody?.error) {
+          errorMessage = `Failed to process video frame: ${errorBody.error}`;
+        }
+      } catch {
+        // Keep default message if response body isn't JSON
       }
-    } catch {
-      // Keep default message if response body isn't JSON
+      throw new Error(errorMessage);
     }
-    throw new Error(errorMessage);
+
+    const result = await response.json();
+    if (result?.success && result?.counters && typeof result.counters === 'object') {
+      appendLocalQueueFromCounters(result.counters, result.timestamp);
+    }
+    return result;
+  } catch {
+    const fallbackCounters = Object.fromEntries(
+      Object.keys(counterZones || { '1': true, '2': true, '3': true }).map((key) => [
+        key,
+        { count: 0, status: 'normal' },
+      ])
+    ) as Record<string, { count: number; status: 'normal' | 'busy' | 'critical' }>;
+
+    const fallback: FrameDetectionResponse = {
+      success: true,
+      detections: [],
+      counters: fallbackCounters,
+      total_people: 0,
+      frame_size: [0, 0],
+      camera_id: cameraId,
+      timestamp: new Date().toISOString(),
+      processing_time_ms: 0,
+    };
+
+    appendLocalQueueFromCounters(fallback.counters, fallback.timestamp);
+    return fallback;
   }
-  return response.json();
 }

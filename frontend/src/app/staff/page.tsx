@@ -5,7 +5,9 @@ import { StaffTable } from "@/components/staff-table"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Activity, AlertTriangle, ArrowRightLeft, BarChart3, Settings, Users, Bell, Download, Upload, CheckCircle2, CircleAlert } from "lucide-react"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Activity, AlertTriangle, ArrowRightLeft, BarChart3, Settings, Users, Bell, Download, Upload, CheckCircle2, CircleAlert, X, UserPlus } from "lucide-react"
 import Link from "next/link"
 import { getCurrentQueue } from "@/api/queueApi"
 import { optimizeStaffByCounter } from "@/api/aiApi"
@@ -21,6 +23,7 @@ type CounterOptimization = {
 
 const SKILL_OPTIONS = ["general", "loan", "account", "cashier", "inquiry", "premium"]
 const SKILL_LEVELS = ["basic", "intermediate", "advanced"] as const
+type SkillLevel = typeof SKILL_LEVELS[number]
 
 const levelToScore = (level: string) => {
   switch (level) {
@@ -50,7 +53,34 @@ export default function StaffPage() {
   const [pageError, setPageError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false)
+  const [isAddSubmitting, setIsAddSubmitting] = useState(false)
+  const [addFormError, setAddFormError] = useState<string | null>(null)
+  const [newStaff, setNewStaff] = useState({
+    staffId: "",
+    name: "",
+    email: "",
+    phone: "",
+    skillLevel: "intermediate" as SkillLevel,
+    skills: ["general"] as string[],
+    shiftStart: "09:00",
+    shiftEnd: "17:00",
+  })
   const lastMovedAtRef = useRef<Record<string, string>>({})
+
+  const resetAddStaffForm = () => {
+    setNewStaff({
+      staffId: "",
+      name: "",
+      email: "",
+      phone: "",
+      skillLevel: "intermediate",
+      skills: ["general"],
+      shiftStart: "09:00",
+      shiftEnd: "17:00",
+    })
+    setAddFormError(null)
+  }
 
   const fetchData = async () => {
     try {
@@ -241,55 +271,76 @@ export default function StaffPage() {
   }
 
   const handleAdd = () => {
-    const staffId = window.prompt("Staff ID (example: S001)")
-    if (!staffId) return
-    const name = window.prompt("Staff name")
-    if (!name) return
-    const email = window.prompt("Staff email")
-    if (!email) return
-    const phone = window.prompt("Staff phone")
-    if (!phone) return
+    resetAddStaffForm()
+    setIsAddModalOpen(true)
+  }
 
-    const skillsInput = window.prompt(
-      `Skills (comma separated). Allowed: ${SKILL_OPTIONS.join(", ")}`,
-      "general"
-    )
-    if (!skillsInput) return
-
-    const parsedSkills = skillsInput
-      .split(",")
-      .map((s) => s.trim().toLowerCase())
-      .filter(Boolean)
-
-    const invalidSkills = parsedSkills.filter((skill) => !SKILL_OPTIONS.includes(skill))
-    if (parsedSkills.length === 0 || invalidSkills.length > 0) {
-      window.alert(`Invalid skills. Use only: ${SKILL_OPTIONS.join(", ")}`)
-      return
-    }
-
-    const skillLevel = window.prompt(`Skill level (${SKILL_LEVELS.join(" | ")})`, "intermediate")
-    if (!skillLevel) return
-    if (!SKILL_LEVELS.includes(skillLevel as any)) {
-      window.alert("Invalid skill level.")
-      return
-    }
-
-    createStaff({
-      staffId,
-      name,
-      email,
-      phone,
-      skillLevel,
-      skills: parsedSkills,
-      performanceScore: levelToScore(skillLevel),
-      shiftStart: "09:00",
-      shiftEnd: "17:00",
+  const toggleSkill = (skill: string) => {
+    setNewStaff((prev) => {
+      const hasSkill = prev.skills.includes(skill)
+      if (hasSkill) {
+        const next = prev.skills.filter((s) => s !== skill)
+        return {
+          ...prev,
+          skills: next.length > 0 ? next : ["general"],
+        }
+      }
+      return {
+        ...prev,
+        skills: [...prev.skills, skill],
+      }
     })
-      .then(() => fetchData())
-      .catch((err: any) => {
-        console.error("Error adding staff:", err)
-        window.alert(err.message || "Failed to create staff member")
+  }
+
+  const handleSubmitAddStaff = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setAddFormError(null)
+
+    const normalizedId = newStaff.staffId.trim().toUpperCase()
+    const normalizedName = newStaff.name.trim()
+    const normalizedEmail = newStaff.email.trim().toLowerCase()
+    const normalizedPhone = newStaff.phone.trim()
+
+    if (!normalizedId || !normalizedName || !normalizedEmail || !normalizedPhone) {
+      setAddFormError("Staff ID, name, email, and phone are required.")
+      return
+    }
+
+    if (!normalizedEmail.includes("@")) {
+      setAddFormError("Please enter a valid email address.")
+      return
+    }
+
+    if (newStaff.skills.length === 0) {
+      setAddFormError("Select at least one skill.")
+      return
+    }
+
+    try {
+      setIsAddSubmitting(true)
+      await createStaff({
+        staffId: normalizedId,
+        name: normalizedName,
+        email: normalizedEmail,
+        phone: normalizedPhone,
+        skillLevel: newStaff.skillLevel,
+        skills: newStaff.skills,
+        performanceScore: levelToScore(newStaff.skillLevel),
+        shiftStart: newStaff.shiftStart,
+        shiftEnd: newStaff.shiftEnd,
       })
+
+      setIsAddModalOpen(false)
+      resetAddStaffForm()
+      await fetchData()
+      setSuccessMessage("Staff member added successfully.")
+      setTimeout(() => setSuccessMessage(null), 4000)
+    } catch (err: any) {
+      console.error("Error adding staff:", err)
+      setAddFormError(err?.message || "Failed to create staff member")
+    } finally {
+      setIsAddSubmitting(false)
+    }
   }
 
   const handleApplySmartOptimization = async () => {
@@ -648,6 +699,171 @@ export default function StaffPage() {
           onDelete={handleDelete} 
           onAdd={handleAdd} 
         />
+
+        {isAddModalOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm"
+            onClick={() => {
+              if (!isAddSubmitting) {
+                setIsAddModalOpen(false)
+              }
+            }}
+          >
+            <div
+              className="w-full max-w-2xl rounded-2xl border border-border/60 bg-card shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-border/50 p-5">
+                <div className="flex items-center gap-3">
+                  <div className="rounded-lg bg-primary/10 p-2">
+                    <UserPlus className="h-5 w-5 text-primary" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold">Add Staff Member</h3>
+                    <p className="text-sm text-muted-foreground">Create a new team profile for allocation and scheduling.</p>
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setIsAddModalOpen(false)}
+                  disabled={isAddSubmitting}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+
+              <form onSubmit={handleSubmitAddStaff} className="space-y-5 p-5">
+                {addFormError && (
+                  <Alert className="border-destructive/50 bg-destructive/5">
+                    <AlertTriangle className="h-4 w-4 text-destructive" />
+                    <AlertDescription className="text-destructive/90">{addFormError}</AlertDescription>
+                  </Alert>
+                )}
+
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="staff-id">Staff ID</Label>
+                    <Input
+                      id="staff-id"
+                      value={newStaff.staffId}
+                      onChange={(e) => setNewStaff((prev) => ({ ...prev, staffId: e.target.value }))}
+                      placeholder="S004"
+                      disabled={isAddSubmitting}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="staff-name">Full Name</Label>
+                    <Input
+                      id="staff-name"
+                      value={newStaff.name}
+                      onChange={(e) => setNewStaff((prev) => ({ ...prev, name: e.target.value }))}
+                      placeholder="John Doe"
+                      disabled={isAddSubmitting}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="staff-email">Email</Label>
+                    <Input
+                      id="staff-email"
+                      type="email"
+                      value={newStaff.email}
+                      onChange={(e) => setNewStaff((prev) => ({ ...prev, email: e.target.value }))}
+                      placeholder="john@company.com"
+                      disabled={isAddSubmitting}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="staff-phone">Phone</Label>
+                    <Input
+                      id="staff-phone"
+                      value={newStaff.phone}
+                      onChange={(e) => setNewStaff((prev) => ({ ...prev, phone: e.target.value }))}
+                      placeholder="+91 9876543210"
+                      disabled={isAddSubmitting}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="staff-level">Skill Level</Label>
+                  <select
+                    id="staff-level"
+                    className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                    value={newStaff.skillLevel}
+                    onChange={(e) => setNewStaff((prev) => ({ ...prev, skillLevel: e.target.value as SkillLevel }))}
+                    disabled={isAddSubmitting}
+                  >
+                    {SKILL_LEVELS.map((level) => (
+                      <option key={level} value={level}>
+                        {level}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Skills</Label>
+                  <div className="flex flex-wrap gap-2 rounded-md border border-border/60 bg-muted/30 p-3">
+                    {SKILL_OPTIONS.map((skill) => {
+                      const selected = newStaff.skills.includes(skill)
+                      return (
+                        <Button
+                          key={skill}
+                          type="button"
+                          size="sm"
+                          variant={selected ? "default" : "outline"}
+                          onClick={() => toggleSkill(skill)}
+                          disabled={isAddSubmitting}
+                          className="capitalize"
+                        >
+                          {skill}
+                        </Button>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="shift-start">Shift Start</Label>
+                    <Input
+                      id="shift-start"
+                      type="time"
+                      value={newStaff.shiftStart}
+                      onChange={(e) => setNewStaff((prev) => ({ ...prev, shiftStart: e.target.value }))}
+                      disabled={isAddSubmitting}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="shift-end">Shift End</Label>
+                    <Input
+                      id="shift-end"
+                      type="time"
+                      value={newStaff.shiftEnd}
+                      onChange={(e) => setNewStaff((prev) => ({ ...prev, shiftEnd: e.target.value }))}
+                      disabled={isAddSubmitting}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-3 border-t border-border/50 pt-4">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setIsAddModalOpen(false)}
+                    disabled={isAddSubmitting}
+                  >
+                    Cancel
+                  </Button>
+                  <Button type="submit" disabled={isAddSubmitting} className="min-w-28">
+                    {isAddSubmitting ? "Saving..." : "Add Staff"}
+                  </Button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   )

@@ -884,6 +884,8 @@ def detect_frame():
     }
     """
     try:
+        start_time = time.perf_counter()
+
         if yolo_model is None:
             load_yolo_model()
 
@@ -895,6 +897,7 @@ def detect_frame():
             }), 503
         
         data = request.get_json()
+        include_annotated = bool(data.get('include_annotated', False))
         
         if 'frame' not in data:
             return jsonify({
@@ -997,14 +1000,17 @@ def detect_frame():
         
         total_people = sum(info["count"] for info in counter_counts.values())
 
-        # Annotate frame with counter regions, bounding boxes and counts
+        # Annotate frame only when explicitly requested (expensive).
         annotated_b64 = None
-        try:
-            ann = _annotate_frame(frame, detections, counter_zones, counter_counts)
-            _, buf = cv2.imencode('.jpg', ann, [cv2.IMWRITE_JPEG_QUALITY, 75])
-            annotated_b64 = base64.b64encode(buf).decode('utf-8')
-        except Exception as ann_err:
-            logger.warning(f"Frame annotation failed: {ann_err}")
+        if include_annotated:
+            try:
+                ann = _annotate_frame(frame, detections, counter_zones, counter_counts)
+                _, buf = cv2.imencode('.jpg', ann, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                annotated_b64 = base64.b64encode(buf).decode('utf-8')
+            except Exception as ann_err:
+                logger.warning(f"Frame annotation failed: {ann_err}")
+
+        processing_time_ms = int((time.perf_counter() - start_time) * 1000)
 
         response = {
             "success": True,
@@ -1014,7 +1020,7 @@ def detect_frame():
             "frame_size": [width, height],
             "camera_id": data.get('camera_id', 'unknown'),
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "processing_time_ms": 0
+            "processing_time_ms": processing_time_ms
         }
         if annotated_b64:
             response["annotated_frame"] = annotated_b64

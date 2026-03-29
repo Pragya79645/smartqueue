@@ -26,6 +26,9 @@ type DraftRect = {
 
 const COUNTERS_LS_KEY = "cameraCounters"
 const COUNTER_COLORS = ["#3b82f6", "#22c55e", "#f97316"]
+const DETECTION_INTERVAL_MS = 250
+const CAPTURE_MAX_WIDTH = 960
+const JPEG_QUALITY = 0.6
 
 const clamp01 = (value: number) => Math.max(0, Math.min(1, value))
 const colorForCounter = (id: number) => COUNTER_COLORS[(id - 1) % COUNTER_COLORS.length]
@@ -52,7 +55,11 @@ export function CameraFeed() {
     const uploadedVideoUrlRef = useRef<string | null>(null)
     const streamRef = useRef<MediaStream | null>(null)
     const processingIntervalRef = useRef<NodeJS.Timeout | null>(null)
+    const processingTimeoutRef = useRef<NodeJS.Timeout | null>(null)
     const frameRequestInFlightRef = useRef(false)
+    const captureDimensionsRef = useRef<{ width: number; height: number }>({ width: 0, height: 0 })
+    const processingLoopActiveRef = useRef(false)
+    const [lastProcessingMs, setLastProcessingMs] = useState<number | null>(null)
 
     useEffect(() => {
         try {
@@ -207,16 +214,44 @@ export function CameraFeed() {
         event.target.value = ""
     }
 
-    const captureFrame = (): string | null => {
+    const captureFrame = async (): Promise<string | null> => {
         if (!videoRef.current || !canvasRef.current) return null
         const video = videoRef.current
         const canvas = canvasRef.current
-        canvas.width = video.videoWidth
-        canvas.height = video.videoHeight
-        const ctx = canvas.getContext("2d")
+
+        if (!video.videoWidth || !video.videoHeight) {
+            return null
+        }
+
+        const scale = Math.min(1, CAPTURE_MAX_WIDTH / video.videoWidth)
+        const targetWidth = Math.max(1, Math.round(video.videoWidth * scale))
+        const targetHeight = Math.max(1, Math.round(video.videoHeight * scale))
+
+        if (
+            captureDimensionsRef.current.width !== targetWidth ||
+            captureDimensionsRef.current.height !== targetHeight
+        ) {
+            canvas.width = targetWidth
+            canvas.height = targetHeight
+            captureDimensionsRef.current = { width: targetWidth, height: targetHeight }
+        }
+
+        const ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: false })
         if (!ctx) return null
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-        return canvas.toDataURL("image/jpeg", 0.8)
+        ctx.drawImage(video, 0, 0, targetWidth, targetHeight)
+
+        const blob = await new Promise<Blob | null>((resolve) => {
+            canvas.toBlob((value) => resolve(value), "image/jpeg", JPEG_QUALITY)
+        })
+
+        if (!blob) return null
+
+        return await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader()
+            reader.onloadend = () => resolve(String(reader.result || ""))
+            reader.onerror = () => reject(new Error("Failed to encode frame"))
+            reader.readAsDataURL(blob)
+        })
     }
 
     const buildCounterZones = (): Record<string, [number, number, number, number]> | undefined => {
@@ -238,27 +273,53 @@ export function CameraFeed() {
     }
 
     const startFrameProcessing = () => {
-        if (processingIntervalRef.current) return
+        if (processingLoopActiveRef.current) return
+        if (processingIntervalRef.current) {
+            clearInterval(processingIntervalRef.current)
+            processingIntervalRef.current = null
+        }
+
+        processingLoopActiveRef.current = true
         setIsProcessing(true)
-        processingIntervalRef.current = setInterval(async () => {
-            if (frameRequestInFlightRef.current) return
-            const frameData = captureFrame()
-            if (!frameData) return
+        const loop = async () => {
+            if (!processingLoopActiveRef.current) return
+            if (frameRequestInFlightRef.current) {
+                processingTimeoutRef.current = setTimeout(loop, DETECTION_INTERVAL_MS)
+                return
+            }
+
             frameRequestInFlightRef.current = true
+            const startedAt = performance.now()
+
             try {
+                const frameData = await captureFrame()
+                if (!frameData) {
+                    return
+                }
+
                 const result = await processVideoFrame(
                     frameData,
                     selectedDeviceId || "webcam",
-                    buildCounterZones()
+                    buildCounterZones(),
+                    { includeAnnotated: false }
                 )
                 setDetectionData(result)
                 setError(null)
             } catch (err) {
                 console.error("Frame processing error:", err)
             } finally {
+                const elapsed = Math.round(performance.now() - startedAt)
+                setLastProcessingMs(elapsed)
                 frameRequestInFlightRef.current = false
+
+                if (processingLoopActiveRef.current) {
+                    const delay = Math.max(0, DETECTION_INTERVAL_MS - elapsed)
+                    processingTimeoutRef.current = setTimeout(loop, delay)
+                }
             }
-        }, 1000)
+        }
+
+        void loop()
     }
 
     useEffect(() => {
@@ -267,13 +328,19 @@ export function CameraFeed() {
     }, [selectedDeviceId, sourceType])
 
     const stopProcessing = () => {
+        processingLoopActiveRef.current = false
         if (processingIntervalRef.current) {
             clearInterval(processingIntervalRef.current)
             processingIntervalRef.current = null
         }
+        if (processingTimeoutRef.current) {
+            clearTimeout(processingTimeoutRef.current)
+            processingTimeoutRef.current = null
+        }
         frameRequestInFlightRef.current = false
         setIsProcessing(false)
         setDetectionData(null)
+        setLastProcessingMs(null)
     }
 
     const getRelativePoint = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -622,6 +689,9 @@ export function CameraFeed() {
                             <div className="absolute bottom-4 left-4 right-4 flex flex-wrap gap-2">
                                 <div className="bg-black/70 text-white text-xs px-3 py-1.5 rounded backdrop-blur-sm">
                                     People Detected: {detectionData.total_people}
+                                </div>
+                                <div className="bg-black/70 text-white text-xs px-3 py-1.5 rounded backdrop-blur-sm">
+                                    Proc: {lastProcessingMs ?? 0}ms
                                 </div>
 
                                 {counters.length > 0 ? (

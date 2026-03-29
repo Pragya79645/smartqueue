@@ -1,10 +1,21 @@
 const QueueRecord = require('../models/QueueRecord');
+const mongoose = require('mongoose');
 const predictionService = require('../services/predictionService');
 const logger = require('../utils/logger');
 
 // GET /queue/live - Get current live queue data
 exports.getLiveQueue = async (req, res) => {
   try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.json({
+        success: true,
+        count: 0,
+        data: [],
+        timestamp: new Date().toISOString(),
+        warning: 'MongoDB is currently disconnected. Returning empty live queue data.'
+      });
+    }
+
     // Get latest queue data for all counters
     const counters = await QueueRecord.aggregate([
       {

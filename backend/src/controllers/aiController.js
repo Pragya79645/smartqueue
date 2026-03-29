@@ -227,7 +227,7 @@ exports.checkAiHealth = async (req, res) => {
  */
 exports.processFrame = async (req, res) => {
   try {
-    const { frame, camera_id, counter_zones } = req.body;
+    const { frame, camera_id, counter_zones, include_annotated } = req.body;
     
     if (!frame) {
       return res.status(400).json({
@@ -239,7 +239,12 @@ exports.processFrame = async (req, res) => {
     // Forward frame to AI Engine for detection
     const response = await axios.post(
       `${AI_ENGINE_URL}/detect-frame`,
-      { frame, camera_id, counter_zones },
+      {
+        frame,
+        camera_id,
+        counter_zones,
+        include_annotated: include_annotated === true,
+      },
       { 
         timeout: 10000,
         maxContentLength: 10 * 1024 * 1024, // 10MB max
