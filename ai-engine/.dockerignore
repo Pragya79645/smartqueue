@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+prediction/queue_dataset.csv
+*.log
+.env
+.venv/
+.envrc
+.git/
+.gitignore
+.DS_Store
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/

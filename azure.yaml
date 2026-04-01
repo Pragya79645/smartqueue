@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+
+name: queue
+metadata:
+    template: azd-init@1.23.13
+services:
+    ai-engine:
+        project: ai-engine
+        host: containerapp
+        language: python
+        docker:
+            path: Dockerfile
+    backend:
+        project: backend
+        host: containerapp
+        language: js
+        docker:
+            path: Dockerfile
+resources:
+    ai-engine:
+        type: host.containerapp
+        port: 5001
+    backend:
+        type: host.containerapp
+        port: 5000

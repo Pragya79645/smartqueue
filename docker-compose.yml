@@ -1,0 +1,92 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:7.0-alpine
+    container_name: queue-mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password
+      MONGO_INITDB_DATABASE: queue-db
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: queue-backend
+    ports:
+      - "5000:5000"
+    environment:
+      NODE_ENV: development
+      MONGODB_URI: mongodb://admin:password@mongodb:27017/queue-db?authSource=admin
+      DATABASE_NAME: queue-db
+      LOG_LEVEL: debug
+      AI_API_URL: http://ai:5001
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    volumes:
+      - ./backend/src:/app/src:delegated
+      - ./backend/logs:/app/logs
+    healthcheck:
+      test: curl -f http://localhost:5000/health || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ai:
+    build:
+      context: ./ai-engine
+      dockerfile: Dockerfile
+    container_name: queue-ai
+    ports:
+      - "5001:5001"
+    environment:
+      LOG_LEVEL: debug
+      OPTIMIZATION_ENABLED: "true"
+    volumes:
+      - ./ai-engine/models:/app/models:ro
+      - ./ai-engine/prediction:/app/prediction:delegated
+      - ./ai-engine/api:/app/api:delegated
+    healthcheck:
+      test: python -c "import requests; requests.get('http://localhost:5001/health', timeout=5)" || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+      args:
+        NEXT_PUBLIC_BACKEND_URL: http://localhost:5000
+        NEXT_PUBLIC_AI_API_URL: http://localhost:5001
+    container_name: queue-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      NEXT_PUBLIC_BACKEND_URL: http://localhost:5000
+      NEXT_PUBLIC_AI_API_URL: http://localhost:5001
+    volumes:
+      - ./frontend/src:/app/src:delegated
+      - ./frontend/public:/app/public:delegated
+    depends_on:
+      - backend
+      - ai
+
+volumes:
+  mongodb_data:
+
+networks:
+  default:
+    name: queue-network
