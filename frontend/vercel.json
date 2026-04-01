@@ -1,10 +1,5 @@
 {
-  "projectId": "YOUR_VERCEL_PROJECT_ID",
-  "org": "YOUR_VERCEL_ORG_ID",
-  "env": [
-    "NEXT_PUBLIC_BACKEND_URL",
-    "NEXT_PUBLIC_AI_API_URL"
-  ],
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "pnpm build",
   "outputDirectory": ".next",
   "devCommand": "pnpm dev",
