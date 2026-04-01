@@ -137,13 +137,44 @@ export function CameraFeed() {
                 videoRef.current.src = ""
                 videoRef.current.srcObject = null
             }
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video: {
-                    ...(selectedDeviceId !== "default" ? { deviceId: { exact: selectedDeviceId } } : {}),
-                    width: { ideal: 1280 },
-                    height: { ideal: 720 }
+
+            const constraintAttempts: MediaStreamConstraints[] = [
+                {
+                    video: {
+                        ...(selectedDeviceId !== "default" ? { deviceId: { exact: selectedDeviceId } } : {}),
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    }
+                },
+                {
+                    video: {
+                        ...(selectedDeviceId !== "default" ? { deviceId: { ideal: selectedDeviceId } } : {}),
+                        width: { ideal: 960 },
+                        height: { ideal: 540 }
+                    }
+                },
+                { video: true }
+            ]
+
+            let stream: MediaStream | null = null
+            let lastMediaError: any = null
+            for (const constraints of constraintAttempts) {
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia(constraints)
+                    break
+                } catch (attemptError: any) {
+                    lastMediaError = attemptError
+                    const retryable = attemptError?.name === "OverconstrainedError" || attemptError?.name === "NotFoundError"
+                    if (!retryable) {
+                        throw attemptError
+                    }
                 }
-            })
+            }
+
+            if (!stream) {
+                throw lastMediaError || new Error("Unable to start camera")
+            }
+
             await loadVideoDevices()
             if (videoRef.current) {
                 videoRef.current.srcObject = stream
@@ -165,6 +196,8 @@ export function CameraFeed() {
                 setError("No camera found. Please connect a camera and try again.")
             } else if (err.name === "NotReadableError" || err.name === "TrackStartError") {
                 setError("Camera is already in use by another application.")
+            } else if (err.name === "OverconstrainedError") {
+                setError("Selected camera settings are not supported. Please switch camera and try again.")
             } else {
                 setError(`Failed to access camera: ${err.message || "Unknown error"}`)
             }

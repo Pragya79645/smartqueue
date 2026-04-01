@@ -15,6 +15,19 @@ function isTransientError(error) {
   return TRANSIENT_CODES.has(error?.code);
 }
 
+function buildPredictionServiceError(error) {
+  const upstreamStatus = error?.response?.status;
+  const upstreamMessage = error?.response?.data?.error || error?.response?.data?.message;
+
+  const wrapped = new Error(
+    upstreamMessage || error?.message || 'Prediction service request failed'
+  );
+  wrapped.code = error?.code || 'PREDICTION_SERVICE_ERROR';
+  wrapped.upstreamStatus = upstreamStatus;
+  wrapped.isServiceUnavailable = isTransientError(error) || upstreamStatus === 502 || upstreamStatus === 503 || upstreamStatus === 504;
+  return wrapped;
+}
+
 async function requestPredictionWithRetry(payload) {
   let lastError = null;
 
@@ -64,63 +77,11 @@ exports.predictQueueLoad = async (historicalData, minutesAhead = 15) => {
     return response.data;
 
   } catch (error) {
-    if (isTransientError(error)) {
-      logger.warn(`Python prediction service unavailable (${error.code}). Using mock prediction.`);
-      // Return mock prediction
-      return mockPrediction(historicalData, minutesAhead);
-    }
-    
-    logger.error('Prediction service error:', error.message);
-    throw error;
+    const wrappedError = buildPredictionServiceError(error);
+    logger.error('Prediction service error:', wrappedError.message);
+    throw wrappedError;
   }
 };
-
-/**
- * Mock prediction for development/testing
- */
-function mockPrediction(historicalData, minutesAhead) {
-  // Simple moving average prediction as fallback
-  const recent = historicalData.slice(-5);
-  const avgLoad = recent.reduce((sum, d) => sum + d.queueSize, 0) / recent.length;
-  
-  // Add some variance based on time of day
-  const hour = new Date().getHours();
-  let multiplier = 1.0;
-  
-  // Peak hours: 10-12, 14-16
-  if ((hour >= 10 && hour <= 12) || (hour >= 14 && hour <= 16)) {
-    multiplier = 1.3;
-  }
-  // Low hours: 8-9, 13-14, 16-18
-  else if ((hour >= 8 && hour < 10) || hour === 13 || (hour >= 16 && hour <= 18)) {
-    multiplier = 0.8;
-  }
-
-  const predictedSize = Math.round(avgLoad * multiplier);
-  const confidence = 0.75;
-  const currentSize = historicalData[historicalData.length - 1]?.queueSize || 0;
-
-  return {
-    success: true,
-    predicted_queue: predictedSize,
-    confidence,
-    minutes_ahead: minutesAhead,
-    current_queue: currentSize,
-    change: predictedSize - currentSize,
-    rush_level: predictedSize > 15 ? 'high' : predictedSize > 8 ? 'medium' : 'low',
-    recommendation: 'Fallback prediction in use. Verify AI Engine availability for LSTM output.',
-    trend: predictedSize >= currentSize ? 'increasing' : 'decreasing',
-    predictions: historicalData.map((d, i) => ({
-      counterId: d.counterId,
-      currentSize: d.queueSize,
-      predictedSize: predictedSize + (i % 3 - 1), // Add slight variation
-      confidence,
-      minutesAhead
-    })),
-    algorithm: 'mock-moving-average',
-    timestamp: new Date().toISOString()
-  };
-}
 
 /**
  * Detect if queue is trending up (potential rush)

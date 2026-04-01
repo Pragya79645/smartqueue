@@ -243,6 +243,14 @@ exports.cleanOldData = async (req, res) => {
 exports.getPredictions = async (req, res) => {
   try {
     const { counterId, minutesAhead = 15 } = req.query;
+    const parsedMinutesAhead = parseInt(minutesAhead, 10);
+
+    if (Number.isNaN(parsedMinutesAhead) || parsedMinutesAhead <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'minutesAhead must be a positive integer'
+      });
+    }
 
     // Get historical data for prediction
     let query = {};
@@ -267,7 +275,7 @@ exports.getPredictions = async (req, res) => {
     // Get predictions from AI service
     const prediction = await predictionService.predictQueueLoad(
       historicalData,
-      parseInt(minutesAhead)
+      parsedMinutesAhead
     );
 
     // Detect rush trend
@@ -283,9 +291,13 @@ exports.getPredictions = async (req, res) => {
 
   } catch (error) {
     logger.error('Error getting predictions:', error);
-    res.status(500).json({
+    const status = error?.isServiceUnavailable
+      ? 503
+      : (error?.upstreamStatus >= 400 && error?.upstreamStatus < 600 ? error.upstreamStatus : 500);
+
+    res.status(status).json({
       success: false,
-      error: 'Failed to get predictions'
+      error: error?.message || 'Failed to get predictions'
     });
   }
 };

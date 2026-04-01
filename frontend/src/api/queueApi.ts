@@ -7,7 +7,6 @@ import {
   appendLocalQueueRecord,
   getLocalLiveQueue,
   getLocalQueueHistory,
-  getLocalQueuePrediction,
 } from '@/lib/localDataStore';
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
@@ -150,19 +149,22 @@ export async function getQueuePrediction(counterId?: string, minutesAhead: numbe
   const searchParams = new URLSearchParams();
   if (counterId) searchParams.append('counterId', counterId);
   searchParams.append('minutesAhead', minutesAhead.toString());
-  
-  try {
-    const response = await fetch(`${BACKEND_URL}/api/queue/predict?${searchParams}`);
-    if (!response.ok) throw new Error('Failed to get queue prediction');
-    return response.json();
-  } catch {
-    return {
-      success: true,
-      prediction: getLocalQueuePrediction(counterId, minutesAhead),
-      timestamp: new Date().toISOString(),
-      source: 'local-fallback',
-    };
+
+  const response = await fetch(`${BACKEND_URL}/api/queue/predict?${searchParams}`);
+  if (!response.ok) {
+    let errorMessage = 'Failed to get queue prediction';
+    try {
+      const body = await response.json();
+      if (body?.error) {
+        errorMessage = body.error;
+      }
+    } catch {
+      // Keep default message when backend body is not JSON.
+    }
+    throw new Error(errorMessage);
   }
+
+  return response.json();
 }
 
 /**
