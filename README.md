@@ -10,16 +10,6 @@ Complete end-to-end system with:
 
 ---
 
-## 🚀 Quick Start
-
-```bash
-# Start all services
-start-all.bat        # Windows
-./start-all.sh       # Linux/Mac
-
-# Open dashboard
-http://localhost:3000/dashboard
-```
 
 **Services:**
 - Frontend: http://localhost:3000
@@ -31,7 +21,7 @@ http://localhost:3000/dashboard
 ## 📁 Project Structure
 
 ```
-load/
+smartqueue/
 ├── ai-engine/          # Python AI/ML components
 │   ├── api/            # Flask REST API
 │   ├── models/         # Trained models (LSTM, YOLO)
@@ -52,10 +42,6 @@ load/
 │       ├── app/        # Pages (dashboard, staff, settings)
 │       └── components/ # UI components
 │
-├── start-all.bat       # Start all services (Windows)
-├── start-all.sh        # Start all services (Linux/Mac)
-├── test-integration.py # Integration test suite
-└── README_INTEGRATION.md # Full integration docs
 ```
 
 ---
@@ -173,13 +159,7 @@ NEXT_PUBLIC_AI_ENGINE_URL=http://localhost:8001
 
 ---
 
-## 🎮 Usage
 
-### Start All Services
-```bash
-# Automated
-start-all.bat        # Windows
-./start-all.sh       # Linux/Mac
 
 # Manual (separate terminals)
 # Terminal 1
@@ -386,47 +366,6 @@ python api/flask_server.py
 - **LSTM Prediction:** ~200ms
 - **OR-Tools Optimization:** ~500ms
 - **Total Latency:** < 1 second
-
----
-
-## 🤝 Contributing
-
-This is a complete integrated system. Key areas for improvement:
-- Additional ML models
-- Enhanced UI/UX
-- Mobile app
-- Advanced analytics
-- Multi-location support
-
----
-
-## 📝 License
-
-MIT License - See LICENSE file
-
----
-
-## 🎉 Project Status
-
-**Phase 4 - Integration: COMPLETE! ✅**
-
-All flows working:
-1. ✅ YOLO → Backend → Frontend
-2. ✅ LSTM → Backend → PredictionCard
-3. ✅ OR-Tools → Backend → Dashboard
-4. ✅ Backend → WhatsApp → Staff
-
-**System fully operational!** 🚀
-
----
-
-## 📞 Support
-
-For issues or questions:
-1. Check troubleshooting section
-2. Review integration docs
-3. Run integration tests
-4. Check service logs
 
 ---
 
